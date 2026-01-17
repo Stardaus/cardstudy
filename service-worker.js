@@ -55,8 +55,9 @@ self.addEventListener('fetch', (event) => {
       return fetch(event.request).then((networkResponse) => {
         // Cache new resources as they are fetched
         return caches.open(CACHE_NAME).then((cache) => {
-          // Do not cache non-GET requests or responses with status not 200
-          if (event.request.method === 'GET' && networkResponse.status === 200) {
+          // Do not cache non-GET requests, non-http(s) schemes, or responses with status not 200
+          const scheme = new URL(event.request.url).protocol;
+          if (event.request.method === 'GET' && networkResponse.status === 200 && (scheme === 'http:' || scheme === 'https:')) {
              cache.put(event.request, networkResponse.clone());
           }
           return networkResponse;
