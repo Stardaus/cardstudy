@@ -1,4 +1,4 @@
-import { openDB as idbOpenDB } from 'idb';
+import { openDB as idbOpenDB } from 'https://unpkg.com/idb@8.0.3/build/index.js';
 import { DB_CONFIG } from '../config/constants.js';
 
 /**
