@@ -14,7 +14,7 @@ export class CsvValidator {
     }
 
     // Get headers from the first row
-    // Note: csvParser ensures these are lowercase
+    // Note: csvParser should ensure these are lowercase, but we verify here.
     const headers = Object.keys(rows[0]);
 
     // Ensure we compare against lowercase config headers for robustness
@@ -26,7 +26,14 @@ export class CsvValidator {
     );
 
     if (missingHeaders.length > 0) {
-      throw new ValidationError('Missing required CSV headers', {
+      // Enhanced Debugging: Log exactly what we have vs what we need
+      console.group('CSV Validation Failed');
+      console.warn('Received Headers:', headers);
+      console.warn('Expected Headers:', requiredHeaders);
+      console.warn('Missing:', missingHeaders);
+      console.groupEnd();
+
+      throw new ValidationError(`Missing required CSV headers: ${missingHeaders.join(', ')}`, {
         type: 'MISSING_HEADERS',
         details: missingHeaders,
       });
