@@ -1,38 +1,58 @@
-// Use esm.sh to get a version of PapaParse that works with 'import'
-import Papa from 'https://esm.sh/papaparse@5.4.1';
+import { CSV_CONFIG } from '../config/constants.js';
+import { ValidationError } from '../config/errors.js';
 
-export class CsvParser {
+export class CsvValidator {
   /**
-   * Parses CSV text using PapaParse.
-   * @param {string} csvText - The CSV data as a string.
-   * @returns {Promise<Array<Object>>} - A promise that resolves with an array of parsed objects.
+   * Validates headers and rows. Throws ValidationError on failure.
+   * @param {Array<Object>} rows - Parsed result from PapaParse
+   * @returns {boolean} true if valid
+   * @throws {ValidationError} with details { type, rows: [] }
    */
-  static async parse(csvText) {
-    return new Promise((resolve, reject) => {
-      Papa.parse(csvText, {
-        header: true,
-        skipEmptyLines: true,
-        // Robustness: Trim headers, remove BOM, and normalize to lowercase to match CSV_CONFIG
-        transformHeader: (header) => header.trim().replace(/^\ufeff/, '').toLowerCase(),
-        complete: (results) => {
-          if (results.errors.length) {
-            // Check if errors are actual blocking errors or just warnings
-            // PapaParse sometimes returns warnings in the errors array
-            const criticalErrors = results.errors.filter(e => e.type === 'Delimiter' || e.type === 'Quotes');
+  static validate(rows) {
+    if (!rows || rows.length === 0) {
+      throw new ValidationError('CSV is empty', { type: 'EMPTY_CSV' });
+    }
 
-            if (criticalErrors.length > 0) {
-              reject(new Error('CSV parsing errors: ' + JSON.stringify(criticalErrors)));
-            } else {
-              resolve(results.data);
-            }
-          } else {
-            resolve(results.data);
-          }
-        },
-        error: (err) => {
-          reject(err);
-        },
+    // Get headers from the first row
+    // Note: csvParser ensures these are lowercase
+    const headers = Object.keys(rows[0]);
+
+    // Ensure we compare against lowercase config headers for robustness
+    const requiredHeaders = CSV_CONFIG.REQUIRED_HEADERS.map(h => h.toLowerCase());
+
+    // Validate Headers
+    const missingHeaders = requiredHeaders.filter(
+      (header) => !headers.includes(header)
+    );
+
+    if (missingHeaders.length > 0) {
+      throw new ValidationError('Missing required CSV headers', {
+        type: 'MISSING_HEADERS',
+        details: missingHeaders,
       });
+    }
+
+    // Validate Required Fields in Rows
+    const rowsWithMissingFields = [];
+    const requiredFields = CSV_CONFIG.REQUIRED_FIELDS.map(f => f.toLowerCase());
+
+    rows.forEach((row, index) => {
+      const missingFields = requiredFields.filter(
+        (field) => !row[field] || String(row[field]).trim() === ''
+      );
+
+      if (missingFields.length > 0) {
+        rowsWithMissingFields.push({ rowIndex: index + 1, missingFields: missingFields });
+      }
     });
+
+    if (rowsWithMissingFields.length > 0) {
+      throw new ValidationError('Some rows have missing required fields', {
+        type: 'MISSING_FIELDS_IN_ROWS',
+        details: rowsWithMissingFields,
+      });
+    }
+
+    return true;
   }
 }
