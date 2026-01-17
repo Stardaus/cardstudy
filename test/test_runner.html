@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CardStudy PWA - Test Suite</title>
+    <link rel="stylesheet" href="../styles/main.css">
+    <style>
+        body { background-color: #fff; }
+        #app { display: none; } /* Hide the main app UI */
+        #test-results {
+            max-width: 800px;
+            margin: 2rem auto;
+            font-family: monospace;
+        }
+        .test-suite { margin-bottom: 1rem; }
+        .test-suite h2 { color: var(--primary-color); }
+        .test-case {
+            padding: 0.5rem;
+            border-left: 3px solid var(--border-color);
+            margin-bottom: 0.5rem;
+        }
+        .test-case.pass { border-left-color: var(--success-color); }
+        .test-case.fail { border-left-color: var(--danger-color); }
+        .test-case .error { color: var(--danger-color); font-weight: bold; }
+    </style>
+</head>
+<body>
+    <div id="app"></div>
+    <div id="test-results">
+        <h1>CardStudy PWA - Test Suite</h1>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js"></script>
+    <script src="https://unpkg.com/idb@8.0.3/build/index.js"></script>
+    <script type="module" src="tests.js"></script>
+</body>
+</html>
