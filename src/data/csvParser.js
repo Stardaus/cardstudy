@@ -12,6 +12,8 @@ export class CsvParser {
       Papa.parse(csvText, {
         header: true,
         skipEmptyLines: true,
+        // Robustness: Trim headers and remove BOM to prevent validation errors
+        transformHeader: (header) => header.trim().replace(/^\ufeff/, ''),
         complete: (results) => {
           if (results.errors.length) {
             // Check if errors are actual blocking errors or just warnings
