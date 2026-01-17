@@ -1,3 +1,5 @@
+import Papa from 'https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js';
+
 export class CsvParser {
   /**
    * Parses CSV text using PapaParse.
@@ -6,7 +8,7 @@ export class CsvParser {
    */
   static async parse(csvText) {
     return new Promise((resolve, reject) => {
-      PapaParse.parse(csvText, {
+      Papa.parse(csvText, {
         header: true,
         skipEmptyLines: true,
         complete: (results) => {
