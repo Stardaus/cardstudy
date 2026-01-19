@@ -78,10 +78,27 @@ async function init() {
     updateAvatarUI();
 
     // 3. Register Service Worker
+    // 3. Register Service Worker with Auto Update Logic
     if ('serviceWorker' in navigator) {
-        navigator.serviceWorker.register('./sw.js')
-            .then(() => console.log('SW Registered'))
-            .catch(err => console.log('SW Fail', err));
+        const reg = await navigator.serviceWorker.register('./sw.js');
+
+        // Listen for updates (when a new SW takes over)
+        let refreshing = false;
+        navigator.serviceWorker.addEventListener('controllerchange', () => {
+            if (refreshing) return;
+            refreshing = true;
+            // Optional: Auto refresh or Toast
+            // window.location.reload(); 
+            // For better UX, let's show a toast that says "Update Done" but we force reload if they click
+            showToast('New version installed! Reloading...', 3000);
+            setTimeout(() => window.location.reload(), 1500);
+        });
+
+        // Also check if there is one waiting
+        if (reg.waiting) {
+            // There is already a new one waiting
+            // We can notify user? sw.js skips waiting so this hits rarely
+        }
     }
 
     // 4. Load Home

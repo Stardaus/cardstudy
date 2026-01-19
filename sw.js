@@ -1,15 +1,15 @@
-const CACHE_NAME = 'flashcard-fun-v4'; // Bumped version
+const CACHE_NAME = 'flashcard-fun-v5'; // Bumped version
 const ASSETS = [
-  './',
-  './index.html',
-  './css/style.css',
-  './js/app.js',
-  './js/vendor/papaparse.min.js',
-  './js/vendor/idb.js',
-  './js/vendor/wrap-idb-value.js', // Added missing dependency
-  './manifest.json',
-  './assets/icon-192.png',
-  './assets/icon-512.png'
+    './',
+    './index.html',
+    './css/style.css',
+    './js/app.js',
+    './js/vendor/papaparse.min.js',
+    './js/vendor/idb.js',
+    './js/vendor/wrap-idb-value.js', // Added missing dependency
+    './manifest.json',
+    './assets/icon-192.png',
+    './assets/icon-512.png'
 ];
 
 // 1. Install: Cache assets and force immediate activation
