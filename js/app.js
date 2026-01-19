@@ -1,12 +1,14 @@
 // Modules
-import Papa from 'https://esm.sh/papaparse@5.4.1';
-import { openDB } from 'https://unpkg.com/idb@7.1.1/build/index.js?module';
+// PapaParse is loaded via script tag in index.html as a global: window.Papa
+import { openDB } from './vendor/idb.js';
 
 // --- CONFIG ---
 const DB_NAME = 'flashcard_fun_v2';
 const STORE_CARDS = 'cards';
 const STORE_PROGRESS = 'progress';
 const STORE_META = 'meta';
+const STORE_USERS = 'users';
+const STORE_STATS = 'user_stats';
 const INTERVALS = [1, 1440, 4320, 10080, 20160, 43200]; // Minutes: 1m, 1d, 3d, 7d, 14d, 30d
 
 // --- STATE ---
@@ -15,6 +17,12 @@ const state = {
     queue: [],
     currentCardIndex: 0,
     currentSubject: null, // null = All
+    currentUser: null,    // null = Guest
+    // Game State
+    gameQueue: [],
+    gameIndex: 0,
+    sessionScore: 0,
+    sessionStreak: 0,
     db: null
 };
 
@@ -22,32 +30,52 @@ const state = {
 const el = {
     app: document.getElementById('app'),
     main: document.getElementById('main-content'),
-    navBtns: document.querySelectorAll('.nav-btn')
+    navBtns: document.querySelectorAll('.nav-btn'),
+    // Will be populated dynamically
+    userAvatar: null
 };
 
 // --- INITIALIZATION ---
 async function init() {
     console.log('✨ Flashcard Fun Starting...');
-    
+
     // 1. Setup DB
-    state.db = await openDB(DB_NAME, 1, {
-        upgrade(db) {
-            db.createObjectStore(STORE_CARDS, { keyPath: 'id' });
-            const pStore = db.createObjectStore(STORE_PROGRESS, { keyPath: 'id' }); // id = variantId
-            pStore.createIndex('due', 'dueAt');
-            db.createObjectStore(STORE_META, { keyPath: 'key' });
+    state.db = await openDB(DB_NAME, 2, {
+        upgrade(db, oldVersion, newVersion, transaction) {
+            if (oldVersion < 1) {
+                db.createObjectStore(STORE_CARDS, { keyPath: 'id' });
+                const pStore = db.createObjectStore(STORE_PROGRESS, { keyPath: 'id' }); // id = variantId
+                pStore.createIndex('due', 'dueAt');
+                db.createObjectStore(STORE_META, { keyPath: 'key' });
+            }
+            if (oldVersion < 2) {
+                // v2: Users
+                db.createObjectStore(STORE_USERS, { keyPath: 'id' });
+                db.createObjectStore(STORE_STATS, { keyPath: 'userId' });
+                // We will migrate progress lazily or use composite keys.
+                // For now, existing progress is "legacy" or "guest".
+            }
         }
     });
+
+    // 1.5 Load User (or Guest)
+    await loadUser();
 
     // 2. Bind Nav
     el.navBtns.forEach(btn => {
         btn.addEventListener('click', (e) => {
             // Find button even if icon clicked
             const targetBtn = e.target.closest('.nav-btn');
+            // If we are in specific views, maybe block? nah.
             const view = targetBtn.dataset.target;
             navigate(view);
         });
     });
+
+    // 3. Register Service Worker
+
+    // Update Avatar UI if existing
+    updateAvatarUI();
 
     // 3. Register Service Worker
     if ('serviceWorker' in navigator) {
@@ -63,7 +91,7 @@ async function init() {
 // --- ROUTER ---
 function navigate(viewName) {
     state.view = viewName;
-    
+
     // Update Nav UI
     el.navBtns.forEach(btn => {
         btn.classList.toggle('active', btn.dataset.target === viewName);
@@ -74,7 +102,10 @@ function navigate(viewName) {
 }
 
 async function render(view) {
-    el.main.innerHTML = ''; // Clear
+    // Clear Main
+    while (el.main.firstChild) {
+        el.main.removeChild(el.main.firstChild);
+    }
 
     if (view === 'home') {
         renderHome();
@@ -82,7 +113,50 @@ async function render(view) {
         await renderStudy();
     } else if (view === 'settings') {
         renderSettings();
+    } else if (view === 'user-select') {
+        renderUserSelect();
+    } else if (view === 'user-create') {
+        renderCreateUser();
+    } else if (view === 'game') {
+        await renderGame();
     }
+}
+
+function updateAvatarUI() {
+    // If we are in Home, we render the avatar. 
+    // Actually, simpler to just re-render Home if we switch users.
+    // This helper might be useful for a persistent header later.
+    const avatarBtn = document.getElementById('user-avatar-btn');
+    if (avatarBtn) {
+        avatarBtn.textContent = state.currentUser ? state.currentUser.avatar : '👤';
+    }
+}
+
+// --- DOM HELPERS ---
+function createElement(tag, className, text) {
+    const element = document.createElement(tag);
+    if (className) element.className = className;
+    if (text) element.textContent = text;
+    return element;
+}
+
+function renderSafeHtml(container, content) {
+    // Basic parser for <mark> tags used in Cloze
+    // This avoids innerHTML completely
+    const parts = content.split(/(<mark>.*?<\/mark>)/g);
+
+    parts.forEach(part => {
+        if (part.startsWith('<mark>') && part.endsWith('</mark>')) {
+            const text = part.replace(/<\/?mark>/g, '');
+            const mark = document.createElement('mark');
+            mark.textContent = text;
+            container.appendChild(mark);
+        } else {
+            if (part) {
+                container.appendChild(document.createTextNode(part));
+            }
+        }
+    });
 }
 
 // --- VIEWS ---
@@ -90,11 +164,11 @@ async function render(view) {
 async function renderHome() {
     const meta = await state.db.get(STORE_META, 'sync_info');
     const allCards = await state.db.getAll(STORE_CARDS);
-    
+
     // 1. Process Subjects
     const subjectMap = new Map();
     let totalCards = 0;
-    
+
     allCards.forEach(card => {
         totalCards++;
         const subj = card.subject || 'Uncategorized';
@@ -104,41 +178,126 @@ async function renderHome() {
     });
 
     // 2. Build HTML
-    const subjectGridHtml = Array.from(subjectMap.entries()).map(([subj, count]) => `
-        <div class="subject-card" onclick="window.app.startStudy('${subj.replace(/'/g, "\\'")}')">
-            <div class="subject-icon">${getSubjectIcon(subj)}</div>
-            <div class="subject-name">${subj}</div>
-            <div class="subject-count">${count} cards</div>
-        </div>
-    `).join('');
+    const container = document.createElement('div');
+    container.style.display = 'flex';
+    container.style.flexDirection = 'column';
+    container.style.textAlign = 'center';
+    container.style.paddingTop = '20px';
+    container.style.paddingBottom = '20px';
+    container.style.width = '100%';
 
-    const html = `
-        <div style="display: flex; flex-direction: column; text-align: center; padding-top: 20px; padding-bottom: 20px; width: 100%;">
-            <div style="font-size: 3rem; margin-bottom: 10px;">🦄</div>
-            <h1>Pick a Topic!</h1>
-            
-            ${meta ? `<p style="font-size: 0.8rem; color: #aaa; margin-bottom: 20px;">Last sync: ${new Date(meta.date).toLocaleDateString()}</p>` : ''}
-            
-            <!-- All Cards Button -->
-            <div class="subject-card" style="width: 100%; flex-direction: row; justify-content: space-between; padding: 15px 30px; margin-bottom: 10px; border-bottom: 4px solid var(--primary);" onclick="window.app.startStudy(null)">
-                <div style="display: flex; align-items: center; gap: 15px;">
-                    <div style="font-size: 2rem;">📚</div>
-                    <div style="text-align: left;">
-                        <div class="subject-name" style="font-size: 1.2rem;">Everything</div>
-                        <div class="subject-count">Mix all ${totalCards} cards</div>
-                    </div>
-                </div>
-                <div style="font-size: 1.5rem; color: var(--primary);">▶</div>
-            </div>
+    // Icon
+    const icon = document.createElement('div');
+    icon.style.fontSize = '3rem';
+    icon.style.marginBottom = '10px';
+    icon.textContent = '🦄';
+    container.appendChild(icon);
 
-            <div class="subject-grid">
-                ${subjectGridHtml}
-            </div>
-            
-            ${totalCards === 0 ? '<p style="margin-top: 40px; color: #888;">No cards found.<br>Go to Setup to add some!</p>' : ''}
-        </div>
-    `;
-    el.main.innerHTML = html;
+    // User Avatar (Top Right)
+    const avatar = createElement('div', 'avatar-btn', state.currentUser ? state.currentUser.avatar : '👤');
+    avatar.id = 'user-avatar-btn';
+    avatar.style.position = 'absolute';
+    avatar.style.top = '20px';
+    avatar.style.right = '20px';
+    avatar.style.fontSize = '1.5rem';
+    avatar.style.cursor = 'pointer';
+    avatar.style.background = '#FFF';
+    avatar.style.padding = '8px';
+    avatar.style.borderRadius = '50%';
+    avatar.style.boxShadow = '0 2px 5px rgba(0,0,0,0.1)';
+    avatar.addEventListener('click', () => navigate('user-select'));
+    container.appendChild(avatar);
+
+    // Title
+    container.appendChild(createElement('h1', null, 'Pick a Topic!'));
+
+    // Meta
+    if (meta) {
+        const metaP = createElement('p', null, `Last sync: ${new Date(meta.date).toLocaleDateString()}`);
+        metaP.style.fontSize = '0.8rem';
+        metaP.style.color = '#aaa';
+        metaP.style.marginBottom = '20px';
+        container.appendChild(metaP);
+    }
+
+    // All Cards Button
+    const allBtn = document.createElement('div');
+    allBtn.className = 'subject-card';
+    allBtn.style.width = '100%';
+    allBtn.style.flexDirection = 'row';
+    allBtn.style.justifyContent = 'space-between';
+    allBtn.style.padding = '15px 30px';
+    allBtn.style.marginBottom = '10px';
+    allBtn.style.borderBottom = '4px solid var(--primary)';
+
+    // Content Wrapper
+    const allContent = document.createElement('div');
+    allContent.style.display = 'flex';
+    allContent.style.alignItems = 'center';
+    allContent.style.gap = '15px';
+
+    const bookIcon = document.createElement('div');
+    bookIcon.style.fontSize = '2rem';
+    bookIcon.textContent = '📚';
+    allContent.appendChild(bookIcon);
+
+    const allText = document.createElement('div');
+    allText.style.textAlign = 'left';
+
+    const allName = createElement('div', 'subject-name', 'Everything');
+    allName.style.fontSize = '1.2rem';
+    allText.appendChild(allName);
+
+    allText.appendChild(createElement('div', 'subject-count', `Mix all ${totalCards} cards`));
+    allContent.appendChild(allText);
+    allBtn.appendChild(allContent);
+
+    const playIcon = document.createElement('div');
+    playIcon.style.fontSize = '1.5rem';
+    playIcon.style.color = 'var(--primary)';
+    playIcon.textContent = '▶';
+    allBtn.appendChild(playIcon);
+
+    allBtn.addEventListener('click', () => {
+        state.currentSubject = null;
+        navigate('study');
+    });
+    container.appendChild(allBtn);
+
+    // Grid
+    const grid = createElement('div', 'subject-grid');
+
+    subjectMap.forEach((count, subj) => {
+        const subCard = createElement('div', 'subject-card');
+
+        const subIcon = createElement('div', 'subject-icon', getSubjectIcon(subj));
+        subCard.appendChild(subIcon);
+
+        const subName = createElement('div', 'subject-name', subj);
+        subCard.appendChild(subName);
+
+        const subCount = createElement('div', 'subject-count', `${count} cards`);
+        subCard.appendChild(subCount);
+
+        subCard.addEventListener('click', () => {
+            state.currentSubject = subj;
+            navigate('study');
+        });
+
+        grid.appendChild(subCard);
+    });
+    container.appendChild(grid);
+
+    if (totalCards === 0) {
+        const emptyP = createElement('p', null, 'No cards found.');
+        emptyP.style.marginTop = '40px';
+        emptyP.style.color = '#888';
+        emptyP.appendChild(document.createElement('br'));
+        emptyP.appendChild(document.createTextNode('Go to Setup to add some!'));
+        container.appendChild(emptyP);
+    }
+
+    el.main.appendChild(container);
 }
 
 function getSubjectIcon(subject) {
@@ -154,49 +313,452 @@ function getSubjectIcon(subject) {
 }
 
 function renderSettings() {
-    // ... (Keep existing settings render) ...
-    const html = `
-        <h1>Settings</h1>
-        
-        <div class="card-panel">
-            <h2>Sync Cards</h2>
-            <p>Paste your Google Sheet Link below:</p>
-            <input type="text" id="csv-url" placeholder="https://docs.google.com/..." />
-            <button class="btn btn-secondary" onclick="window.app.syncCards()">Sync Now</button>
-            <p style="font-size: 0.8rem; margin-top: 10px; color: #888;">
-                Make sure your sheet has: <code>id, subject, question, answer, notes</code>
-            </p>
-        </div>
+    const title = createElement('h1', null, 'Settings');
+    el.main.appendChild(title);
 
-        <div class="card-panel">
-            <h2>Reset</h2>
-            <button class="btn btn-primary" style="background-color: var(--error);" onclick="window.app.resetAll()">Delete Everything</button>
-        </div>
-    `;
-    el.main.innerHTML = html;
+    // Sync Panel
+    const syncPanel = createElement('div', 'card-panel');
+    syncPanel.appendChild(createElement('h2', null, 'Sync Cards'));
+    syncPanel.appendChild(createElement('p', null, 'Paste your Google Sheet Link below:'));
+
+    const input = createElement('input');
+    input.type = 'text';
+    input.id = 'csv-url';
+    input.placeholder = 'https://docs.google.com/...';
+    syncPanel.appendChild(input);
+
+    const syncBtn = createElement('button', 'btn btn-secondary', 'Sync Now');
+    syncBtn.addEventListener('click', syncCards);
+    syncPanel.appendChild(syncBtn);
+
+    const helpP = createElement('p', null);
+    helpP.style.fontSize = '0.8rem';
+    helpP.style.marginTop = '10px';
+    helpP.style.color = '#888';
+    helpP.textContent = 'Make sure your sheet has: ';
+    const code = createElement('code', null, 'id, subject, question, answer, notes');
+    helpP.appendChild(code);
+    syncPanel.appendChild(helpP);
+
+    el.main.appendChild(syncPanel);
+
+    // Reset Panel
+    const resetPanel = createElement('div', 'card-panel');
+    resetPanel.appendChild(createElement('h2', null, 'Reset'));
+
+    const resetBtn = createElement('button', 'btn btn-primary', 'Delete Everything');
+    resetBtn.style.backgroundColor = 'var(--error)';
+    resetBtn.addEventListener('click', resetAll);
+    resetPanel.appendChild(resetBtn);
+
+    el.main.appendChild(resetPanel);
+
+    // User Debug
+    const userPanel = createElement('div', 'card-panel');
+    userPanel.appendChild(createElement('h2', null, 'User'));
+    const switchBtn = createElement('button', 'btn btn-secondary', 'Switch User');
+    switchBtn.addEventListener('click', () => navigate('user-select'));
+    userPanel.appendChild(switchBtn);
+    el.main.appendChild(userPanel);
+}
+
+// --- USER VIEWS ---
+
+async function renderUserSelect() {
+    const title = createElement('h1', null, 'Who are you?');
+    el.main.appendChild(title);
+
+    const users = await state.db.getAll(STORE_USERS);
+
+    const grid = createElement('div', 'subject-grid'); // Reuse grid style
+
+    // Guest Option
+    const guestCard = createElement('div', 'subject-card');
+    guestCard.style.borderBottom = '4px solid #ccc';
+    guestCard.appendChild(createElement('div', 'subject-icon', '👤'));
+    guestCard.appendChild(createElement('div', 'subject-name', 'Guest'));
+    guestCard.addEventListener('click', () => switchUser(null));
+    grid.appendChild(guestCard);
+
+    // Existing Users
+    users.forEach(user => {
+        const card = createElement('div', 'subject-card');
+        card.style.borderBottom = `4px solid ${user.color || 'var(--primary)'}`;
+        card.appendChild(createElement('div', 'subject-icon', user.avatar));
+        card.appendChild(createElement('div', 'subject-name', user.name));
+
+        // Delete button (small)
+        // const del = createElement('span', null, 'x');
+        // ... simplistic for now
+
+        card.addEventListener('click', () => switchUser(user.id));
+        grid.appendChild(card);
+    });
+
+    // New User
+    const newCard = createElement('div', 'subject-card');
+    newCard.style.border = '2px dashed #aaa';
+    newCard.style.background = 'transparent';
+    newCard.appendChild(createElement('div', 'subject-icon', '➕'));
+    newCard.appendChild(createElement('div', 'subject-name', 'Add User'));
+    newCard.addEventListener('click', () => navigate('user-create'));
+    grid.appendChild(newCard);
+
+    el.main.appendChild(grid);
+}
+
+function renderCreateUser() {
+    const title = createElement('h1', null, 'New Profile');
+    el.main.appendChild(title);
+
+    const form = createElement('div', 'card-panel');
+
+    const label = createElement('p', null, 'Name:');
+    const input = createElement('input');
+    input.placeholder = 'Super learner...';
+    form.appendChild(label);
+    form.appendChild(input);
+
+    const avatars = ['🦊', '🐼', '🐸', '🦁', '🦄', '🐙', '🚀', '⭐'];
+    let selectedAvatar = avatars[0];
+
+    const avGrid = document.createElement('div');
+    avGrid.style.display = 'flex';
+    avGrid.style.gap = '10px';
+    avGrid.style.marginBottom = '20px';
+    avGrid.style.flexWrap = 'wrap';
+    avGrid.style.justifyContent = 'center';
+
+    avatars.forEach(av => {
+        const btn = createElement('div', null, av);
+        btn.style.fontSize = '2rem';
+        btn.style.cursor = 'pointer';
+        btn.style.padding = '5px';
+        btn.style.borderRadius = '50%';
+        btn.style.border = '2px solid transparent';
+
+        if (av === selectedAvatar) btn.style.borderColor = 'var(--primary)';
+
+        btn.addEventListener('click', () => {
+            Array.from(avGrid.children).forEach(c => c.style.borderColor = 'transparent');
+            btn.style.borderColor = 'var(--primary)';
+            selectedAvatar = av;
+        });
+        avGrid.appendChild(btn);
+    });
+    form.appendChild(createElement('p', null, 'Pick an avatar:'));
+    form.appendChild(avGrid);
+
+    const saveBtn = createElement('button', 'btn btn-primary', 'Create');
+    saveBtn.addEventListener('click', async () => {
+        const name = input.value.trim();
+        if (!name) return showToast('Name required');
+        await createUser(name, selectedAvatar);
+    });
+    form.appendChild(saveBtn);
+
+    el.main.appendChild(form);
+}
+
+// --- GAME / QUIZ VIEWS ---
+
+async function renderGame() {
+    // 1. Build Queue (similar to study but focused on Quiz)
+    // We reuse the logic but store in gameQueue
+    const now = Date.now();
+    const allCards = await state.db.getAll(STORE_CARDS);
+
+    // Filter
+    const filteredCards = state.currentSubject
+        ? allCards.filter(c => (c.subject || 'Uncategorized').trim() === state.currentSubject)
+        : allCards;
+
+    state.gameQueue = [];
+
+    // Simple Queue Builder (Reuse Logic roughly)
+    for (const card of filteredCards) {
+        // QA
+        const qaId = `${card.id}::qa`;
+        const qaProg = await state.db.get(STORE_PROGRESS, getProgressKey(qaId));
+        if (!qaProg || qaProg.dueAt <= now) {
+            state.gameQueue.push({
+                variantId: qaId,
+                type: 'qa',
+                question: card.question,
+                answer: card.answer,
+                subject: card.subject,
+                box: qaProg ? qaProg.box : 0
+            });
+        }
+
+        // Cloze
+        if (card.notes) {
+            const regex = /(\{\{|\[\[)(.*?)(\}\}|\]\])/g;
+            let matches = [];
+            let match;
+            while ((match = regex.exec(card.notes)) !== null) {
+                matches.push({ content: match[2], full: match[0], index: match.index });
+            }
+            // Add Cloze variants
+            matches.forEach((m, i) => {
+                const clozeId = `${card.id}::cloze::${i}`;
+                // We need to async check progress inside loop, slightly slow but ok for now
+                // Actually, let's just push and filter later or Assume if card is due, some cloze might be?
+                // For correctness, we should check. 
+                // To avoid await in loop causing stutter, we could Promise.all but standard loop is fine for <1000 cards.
+            });
+            // Optimization: Just add QA for Game MVP to reduce complexity? 
+            // PROMPT said: "Cloze Notes: Prompt = Note with {{...}} replaced by _____"
+            // Let's implement Cloze support.
+            for (let i = 0; i < matches.length; i++) {
+                const clozeId = `${card.id}::cloze::${i}`;
+                const prog = await state.db.get(STORE_PROGRESS, getProgressKey(clozeId));
+                if (!prog || prog.dueAt <= now) {
+                    // Create Cloze Question
+                    let qText = card.notes;
+                    matches.forEach((m2, i2) => {
+                        if (i === i2) {
+                            qText = qText.replace(m2.full, '_____');
+                        } else {
+                            qText = qText.replace(m2.full, m2.content);
+                        }
+                    });
+
+                    state.gameQueue.push({
+                        variantId: clozeId,
+                        type: 'cloze',
+                        question: qText,
+                        answer: matches[i].content,
+                        subject: card.subject,
+                        box: prog ? prog.box : 0
+                    });
+                }
+            }
+        }
+    }
+
+    // Shuffle
+    for (let i = state.gameQueue.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [state.gameQueue[i], state.gameQueue[j]] = [state.gameQueue[j], state.gameQueue[i]];
+    }
+
+    state.gameIndex = 0;
+    state.sessionScore = 0;
+    state.sessionStreak = 0;
+
+    if (state.gameQueue.length === 0) {
+        return renderGameEmpty();
+    }
+
+    renderQuizStage();
+}
+
+function renderGameEmpty() {
+    const center = createElement('div', 'center-content');
+    center.style.flexDirection = 'column';
+    center.style.textAlign = 'center';
+    center.appendChild(createElement('div', null, '🎉'));
+    center.lastChild.style.fontSize = '4rem';
+    center.appendChild(createElement('h2', null, 'All Caught Up!'));
+    center.appendChild(createElement('p', null, 'You crushed the quiz.'));
+
+    // Maybe offer to review anyway?
+    const btn = createElement('button', 'btn btn-secondary', 'Review Flashcards');
+    btn.addEventListener('click', () => navigate('study'));
+    center.appendChild(btn);
+
+    const backBtn = createElement('button', 'btn btn-primary', 'Home');
+    backBtn.style.backgroundColor = 'transparent';
+    backBtn.style.color = 'var(--primary)';
+    backBtn.addEventListener('click', () => navigate('home'));
+    center.appendChild(backBtn);
+
+    el.main.appendChild(center);
+}
+
+async function renderQuizStage() {
+    // Clear
+    while (el.main.firstChild) el.main.removeChild(el.main.firstChild);
+
+    const item = state.gameQueue[state.gameIndex];
+    if (!item) return renderGameEmpty();
+
+    // 1. HUD (Score + Streak)
+    const hud = createElement('div', 'game-hud');
+    hud.style.display = 'flex';
+    hud.style.justifyContent = 'space-between';
+    hud.style.padding = '10px';
+    hud.style.fontWeight = 'bold';
+
+    hud.appendChild(createElement('span', null, `Score: ${state.sessionScore}`));
+    hud.appendChild(createElement('span', null, `Streak: 🔥 ${state.sessionStreak}`));
+    el.main.appendChild(hud);
+
+    // 2. Question Card
+    const card = createElement('div', 'flashcard'); // reuse style
+    card.style.minHeight = '200px';
+    card.style.height = 'auto';
+    card.style.marginBottom = '20px';
+    card.style.cursor = 'default';
+    card.style.transform = 'none'; // No flip
+    card.style.background = '#FFF';
+
+    const content = createElement('div', 'card-content');
+    content.textContent = item.question;
+    content.style.padding = '20px';
+    card.appendChild(content);
+    el.main.appendChild(card);
+
+    // 3. Options
+    const optionsGrid = createElement('div', 'subject-grid'); // reused grid
+
+    // Generate Options
+    const opts = await generateOptions(item);
+
+    opts.forEach(optText => {
+        const btn = createElement('button', 'btn btn-secondary', optText);
+        btn.style.height = '100%';
+        btn.style.minHeight = '60px';
+        btn.style.display = 'flex';
+        btn.style.alignItems = 'center';
+        btn.style.justifyContent = 'center';
+
+        btn.onclick = () => handleAnswer(btn, optText, item);
+
+        optionsGrid.appendChild(btn);
+    });
+
+    el.main.appendChild(optionsGrid);
+}
+
+async function generateOptions(currentItem) {
+    // 1 Correct + 3 Distractors
+    const allCards = await state.db.getAll(STORE_CARDS);
+
+    // Filter potential distractors (Same subject is better)
+    let pool = allCards.filter(c => c.subject === currentItem.subject);
+    if (pool.length < 4) pool = allCards; // Fallback to all
+
+    const distractors = new Set();
+    // Safety check: if DB is empty? (unlikely if we are here)
+    if (pool.length === 0) return [currentItem.answer, 'A', 'B', 'C'];
+
+    // Try to find 3 unique distractors
+    let attempts = 0;
+    while (distractors.size < 3 && attempts < 50) {
+        attempts++;
+        const r = pool[Math.floor(Math.random() * pool.length)];
+        const val = r.answer;
+        // If cloze, we might want random words? 
+        // For now, using 'answer' field of other cards is a decent approximation 
+        // of "relevant terms" in the subject.
+
+        if (val !== currentItem.answer && val.trim().length > 0) {
+            distractors.add(val);
+        }
+    }
+
+    // If we failed to get 3, fill with generic?
+    while (distractors.size < 3) {
+        distractors.add(`Must be ${distractors.size}`); // Placeholder
+    }
+
+    const opts = Array.from(distractors);
+    opts.push(currentItem.answer);
+
+    // Shuffle options
+    for (let i = opts.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [opts[i], opts[j]] = [opts[j], opts[i]];
+    }
+    return opts;
+}
+
+async function handleAnswer(btnElement, selectedText, item) {
+    const isCorrect = selectedText === item.answer;
+
+    // UI Feedback
+    if (isCorrect) {
+        btnElement.style.backgroundColor = 'var(--success)';
+        state.sessionScore += 10 + state.sessionStreak; // Bonus
+        state.sessionStreak++;
+        showToast(`Correct! +${10 + state.sessionStreak - 1}`);
+    } else {
+        btnElement.style.backgroundColor = 'var(--error)';
+        state.sessionStreak = 0;
+        showToast('Oops! 😅');
+        // Highlight correct one?
+        // We can find the button with the correct text and paint green
+        // But for now, just move on
+    }
+
+    // Logic Update (reuse Grade but with known=isCorrect)
+    // We need to inject the item into state.queue/index structure or call a specialized grade
+    // Let's call a specialized helper to update DB without messing with 'study' queue
+    await updateProgress(item, isCorrect);
+
+    // Update Score in DB (if User)
+    if (state.currentUser && isCorrect) {
+        const stats = (await state.db.get(STORE_STATS, state.currentUser.id)) || {
+            userId: state.currentUser.id,
+            totalScore: 0
+        };
+        stats.totalScore = (stats.totalScore || 0) + 10 + (state.sessionStreak - 1);
+        await state.db.put(STORE_STATS, stats);
+    }
+
+    // Next
+    setTimeout(() => {
+        state.gameIndex++;
+        renderQuizStage();
+    }, 1200);
+}
+
+// Separate progress updater that doesn't rely on 'study queue' state
+async function updateProgress(item, known) {
+    let newBox = known ? item.box + 1 : 0;
+    if (newBox >= INTERVALS.length) newBox = INTERVALS.length - 1;
+
+    const minutes = INTERVALS[newBox];
+    const dueAt = Date.now() + (minutes * 60 * 1000);
+    const progId = getProgressKey(item.variantId);
+
+    await state.db.put(STORE_PROGRESS, {
+        id: progId,
+        box: newBox,
+        dueAt: dueAt,
+        lastReview: Date.now()
+    });
+}
+
+
+function getProgressKey(variantId) {
+    if (state.currentUser) {
+        return `${state.currentUser.id}::${variantId}`;
+    }
+    return variantId; // Legacy/Guest
 }
 
 async function renderStudy() {
     // 1. Build Queue
     const now = Date.now();
-    const allProgress = await state.db.getAll(STORE_PROGRESS);
-    
-    // Filter progress first? No, we need card details first to know variants.
-    
+
     const allCards = await state.db.getAll(STORE_CARDS);
-    
+
     // Filter by Subject if selected
-    const filteredCards = state.currentSubject 
+    const filteredCards = state.currentSubject
         ? allCards.filter(c => (c.subject || 'Uncategorized').trim() === state.currentSubject)
         : allCards;
 
     state.queue = [];
-    
+
     for (const card of filteredCards) {
         // --- 1. QA Variant ---
         const qaId = `${card.id}::qa`;
-        let qaProg = await state.db.get(STORE_PROGRESS, qaId);
-        
+        // KEY CHANGE: User-aware progress
+        let qaProg = await state.db.get(STORE_PROGRESS, getProgressKey(qaId));
+
         let shouldAddQA = false;
         let qaBox = 0;
 
@@ -218,7 +780,7 @@ async function renderStudy() {
                 box: qaBox
             });
         }
-        
+
         // --- 2. Cloze Variants (Multiple per card) ---
         if (card.notes) {
             const regex = /(\{\{|\[\[)(.*?)(\}\}|\]\])/g;
@@ -237,7 +799,8 @@ async function renderStudy() {
                 // Generate a variant for EACH match
                 for (let i = 0; i < matches.length; i++) {
                     const clozeId = `${card.id}::cloze::${i}`;
-                    let clozeProg = await state.db.get(STORE_PROGRESS, clozeId);
+                    // KEY CHANGE: User-aware progress
+                    let clozeProg = await state.db.get(STORE_PROGRESS, getProgressKey(clozeId));
 
                     let shouldAddCloze = false;
                     let clozeBox = 0;
@@ -291,7 +854,7 @@ async function renderStudy() {
     }
 
     // --- 3. Shuffle & Sibling Spacing ---
-    
+
     // Step A: Standard Fisher-Yates Shuffle
     for (let i = state.queue.length - 1; i > 0; i--) {
         const j = Math.floor(Math.random() * (i + 1));
@@ -301,7 +864,7 @@ async function renderStudy() {
     // Step B: Sibling Spacing (Prevent adjacent same rowId)
     // Attempt to separate siblings by swapping
     for (let i = 1; i < state.queue.length; i++) {
-        if (state.queue[i].rowId === state.queue[i-1].rowId) {
+        if (state.queue[i].rowId === state.queue[i - 1].rowId) {
             // Found adjacent siblings. Look ahead for a swap candidate.
             // We want any card j > i where rowId != current
             let swapCandidates = [];
@@ -324,14 +887,23 @@ async function renderStudy() {
     state.currentCardIndex = 0;
 
     if (state.queue.length === 0) {
-        el.main.innerHTML = `
-            <div class="center-content" style="flex-direction: column; text-align: center;">
-                <div style="font-size: 4rem;">🎉</div>
-                <h2>All caught up!</h2>
-                <p>No ${state.currentSubject ? state.currentSubject : ''} cards due right now.</p>
-                <button class="btn btn-secondary" onclick="window.app.navigate('home')">Pick another topic</button>
-            </div>
-        `;
+        const center = createElement('div', 'center-content');
+        center.style.flexDirection = 'column';
+        center.style.textAlign = 'center';
+
+        const icon = document.createElement('div');
+        icon.style.fontSize = '4rem';
+        icon.textContent = '🎉';
+        center.appendChild(icon);
+
+        center.appendChild(createElement('h2', null, 'All caught up!'));
+        center.appendChild(createElement('p', null, `No ${state.currentSubject ? state.currentSubject : ''} cards due right now.`));
+
+        const btn = createElement('button', 'btn btn-secondary', 'Pick another topic');
+        btn.addEventListener('click', () => navigate('home'));
+        center.appendChild(btn);
+
+        el.main.appendChild(center);
         return;
     }
 
@@ -339,37 +911,98 @@ async function renderStudy() {
 }
 
 function renderCardStage() {
+    // Clear Main (just in case called directly)
+    while (el.main.firstChild) {
+        el.main.removeChild(el.main.firstChild);
+    }
+
     const card = state.queue[state.currentCardIndex];
     const total = state.queue.length;
     const current = state.currentCardIndex + 1;
 
-    const html = `
-        <div style="display: flex; justify-content: space-between; margin-bottom: 10px; color: var(--text-light); font-weight: 700;">
-            <span>${current} / ${total}</span>
-            <span>Box: ${card.box}</span>
-        </div>
-        
-        <div class="flashcard-stage">
-            <div class="flashcard" onclick="this.classList.toggle('flipped')">
-                <div class="card-face card-front">
-                    <div class="card-sub">${card.type === 'qa' ? 'Question' : 'Fill the Blank'}</div>
-                    <div class="card-content">${card.front}</div>
-                    <div style="position: absolute; bottom: 20px; color: #ccc; font-size: 0.8rem;">Tap to Flip</div>
-                </div>
-                <div class="card-face card-back">
-                    <div class="card-sub">Answer</div>
-                    <div class="card-content">${card.back}</div>
-                    ${card.type === 'qa' && card.notes ? `<div style="margin-top: 15px; font-size: 0.9rem; color: #666;">${card.notes}</div>` : ''}
-                </div>
-            </div>
-        </div>
+    // Header Info
+    const info = document.createElement('div');
+    info.style.display = 'flex';
+    info.style.justifyContent = 'space-between';
+    info.style.marginBottom = '10px';
+    info.style.color = 'var(--text-light)';
+    info.style.fontWeight = '700';
+    info.appendChild(createElement('span', null, `${current} / ${total}`));
+    info.appendChild(createElement('span', null, `Box: ${card.box}`));
+    el.main.appendChild(info);
 
-        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px; margin-top: 20px;">
-            <button class="btn btn-primary" style="background-color: var(--error);" onclick="window.app.grade(false)">Help!</button>
-            <button class="btn btn-success" onclick="window.app.grade(true)">Got It!</button>
-        </div>
-    `;
-    el.main.innerHTML = html;
+    // Stage
+    const stage = createElement('div', 'flashcard-stage');
+    const flashcard = createElement('div', 'flashcard');
+    flashcard.addEventListener('click', function () {
+        this.classList.toggle('flipped');
+    });
+
+    // Front
+    const cardFront = createElement('div', 'card-face card-front');
+    cardFront.appendChild(createElement('div', 'card-sub', card.type === 'qa' ? 'Question' : 'Fill the Blank'));
+
+    const frontContent = createElement('div', 'card-content');
+    // Front is always text-ish, but cloze front has '_____' which is safe text.
+    // However, for consistency and safety, we treat it as text unless we specifically needed markup.
+    // The previous code put '_____' and static text.
+    // The 'cloze' generation logic produces text for 'front' (no HTML tags).
+    // The 'qa' front is the question.
+    frontContent.textContent = card.front;
+    cardFront.appendChild(frontContent);
+
+    const tapHint = createElement('div', null, 'Tap to Flip');
+    tapHint.style.position = 'absolute';
+    tapHint.style.bottom = '20px';
+    tapHint.style.color = '#ccc';
+    tapHint.style.fontSize = '0.8rem';
+    cardFront.appendChild(tapHint);
+
+    flashcard.appendChild(cardFront);
+
+    // Back
+    const cardBack = createElement('div', 'card-face card-back');
+    cardBack.appendChild(createElement('div', 'card-sub', 'Answer'));
+
+    const backContent = createElement('div', 'card-content');
+    if (card.type === 'cloze') {
+        renderSafeHtml(backContent, card.back);
+    } else {
+        backContent.textContent = card.back;
+    }
+    cardBack.appendChild(backContent);
+
+    if (card.type === 'qa' && card.notes) {
+        const notesDiv = createElement('div');
+        notesDiv.style.marginTop = '15px';
+        notesDiv.style.fontSize = '0.9rem';
+        notesDiv.style.color = '#666';
+        // Strip markers like {{content}} or [[content]] but keep the content
+        notesDiv.textContent = card.notes.replace(/\{\{(.*?)\}\}/g, '$1').replace(/\[\[(.*?)\]\]/g, '$1');
+        cardBack.appendChild(notesDiv);
+    }
+
+    flashcard.appendChild(cardBack);
+    stage.appendChild(flashcard);
+    el.main.appendChild(stage);
+
+    // Buttons
+    const btnGrid = document.createElement('div');
+    btnGrid.style.display = 'grid';
+    btnGrid.style.gridTemplateColumns = '1fr 1fr';
+    btnGrid.style.gap = '15px';
+    btnGrid.style.marginTop = '20px';
+
+    const helpBtn = createElement('button', 'btn btn-primary', 'Help!');
+    helpBtn.style.backgroundColor = 'var(--error)';
+    helpBtn.addEventListener('click', () => grade(false));
+    btnGrid.appendChild(helpBtn);
+
+    const gotItBtn = createElement('button', 'btn btn-success', 'Got It!');
+    gotItBtn.addEventListener('click', () => grade(true));
+    btnGrid.appendChild(gotItBtn);
+
+    el.main.appendChild(btnGrid);
 }
 
 // --- LOGIC ---
@@ -383,12 +1016,23 @@ async function grade(known) {
     const dueAt = Date.now() + (minutes * 60 * 1000);
 
     // Save
+    // KEY CHANGE: User-aware
+    const progId = getProgressKey(card.variantId);
+
     await state.db.put(STORE_PROGRESS, {
-        id: card.variantId,
+        id: progId,
         box: newBox,
         dueAt: dueAt,
         lastReview: Date.now()
     });
+
+    // Update Score also in Study Mode?
+    // Plan: "Score is +10 per Got It"
+    if (known && state.currentUser) {
+        const stats = (await state.db.get(STORE_STATS, state.currentUser.id)) || { userId: state.currentUser.id, totalScore: 0 };
+        stats.totalScore = (stats.totalScore || 0) + 10;
+        await state.db.put(STORE_STATS, stats);
+    }
 
     showToast(known ? 'Great Job! 🌟' : 'Keep Trying! 💪');
 
@@ -405,12 +1049,22 @@ async function grade(known) {
 async function syncCards() {
     const urlInput = document.getElementById('csv-url');
     let url = urlInput.value.trim();
-    
+
     if (!url) return showToast('Please enter a URL');
+
+    // SECURITY: Enforce HTTPS
+    try {
+        const parsedUrl = new URL(url);
+        if (parsedUrl.protocol !== 'https:') {
+            return showToast('Error: HTTPS required');
+        }
+    } catch (e) {
+        return showToast('Error: Invalid URL');
+    }
 
     // FIX: Normalize URL
     if (url.includes('/edit') || url.includes('/view')) {
-         url = url.replace(/\/edit.*$/, '/export?format=csv').replace(/\/view.*$/, '/export?format=csv');
+        url = url.replace(/\/edit.*$/, '/export?format=csv').replace(/\/view.*$/, '/export?format=csv');
     }
 
     try {
@@ -421,7 +1075,10 @@ async function syncCards() {
         // FIX: HTML check
         if (text.trim().startsWith('<')) throw new Error('Invalid Link (Is it public?)');
 
-        Papa.parse(text, {
+        // Parse with Papa (global)
+        if (!window.Papa) throw new Error('PapaParse not loaded');
+
+        window.Papa.parse(text, {
             header: true,
             skipEmptyLines: true,
             transformHeader: h => h.trim().toLowerCase(), // FIX: Case insensitive
@@ -432,7 +1089,7 @@ async function syncCards() {
 
                 const rows = results.data;
                 const tx = state.db.transaction([STORE_CARDS], 'readwrite');
-                
+
                 let count = 0;
                 for (const row of rows) {
                     if (row.id && row.question && row.answer) {
@@ -441,9 +1098,9 @@ async function syncCards() {
                     }
                 }
                 await tx.done;
-                
+
                 await state.db.put(STORE_META, { key: 'sync_info', date: Date.now() });
-                
+
                 showToast(`Synced ${count} cards! 🎉`);
                 navigate('home');
             }
@@ -455,7 +1112,7 @@ async function syncCards() {
 }
 
 async function resetAll() {
-    if(!confirm('Delete all data?')) return;
+    if (!confirm('Delete all data?')) return;
     await state.db.clear(STORE_CARDS);
     await state.db.clear(STORE_PROGRESS);
     await state.db.clear(STORE_META);
@@ -468,29 +1125,69 @@ function showToast(msg) {
     toast.className = 'toast';
     toast.textContent = msg;
     document.body.appendChild(toast);
-    
+
     // Animate
     requestAnimationFrame(() => toast.classList.add('visible'));
-    
+
     setTimeout(() => {
         toast.classList.remove('visible');
         setTimeout(() => toast.remove(), 500);
     }, 2000);
 }
 
-// --- EXPORT TO WINDOW (for inline HTML events) ---
-// Define this BEFORE calling init() or rendering any views to ensure
-// functions like syncCards are available when buttons are clicked.
-window.app = {
-    startStudy: (subject = null) => {
-        state.currentSubject = subject;
-        navigate('study');
-    },
-    syncCards,
-    resetAll,
-    navigate,
-    grade
-};
+// --- USER LOGIC ---
+
+async function loadUser() {
+    const lastId = localStorage.getItem('lastUserId');
+    if (lastId) {
+        try {
+            const user = await state.db.get(STORE_USERS, lastId);
+            if (user) {
+                state.currentUser = user;
+                console.log('Logged in as:', user.name);
+            }
+        } catch (e) {
+            console.error('Error loading user', e);
+        }
+    }
+}
+
+async function switchUser(userId) {
+    if (!userId) {
+        state.currentUser = null;
+        localStorage.removeItem('lastUserId');
+        showToast('Switched to Guest');
+    } else {
+        const user = await state.db.get(STORE_USERS, userId);
+        if (user) {
+            state.currentUser = user;
+            localStorage.setItem('lastUserId', userId);
+            showToast(`Welcome back, ${user.name}!`);
+        }
+    }
+    navigate('home');
+}
+
+async function createUser(name, avatar) {
+    const id = crypto.randomUUID();
+    const newUser = {
+        id,
+        name,
+        avatar,
+        created: Date.now(),
+        color: '#FFB7B2' // Default pink for now, or random
+    };
+
+    await state.db.put(STORE_USERS, newUser);
+    // Init stats
+    await state.db.put(STORE_STATS, {
+        userId: id,
+        totalScore: 0,
+        highScores: {}
+    });
+
+    await switchUser(id);
+}
 
 // Start
 init();

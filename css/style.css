@@ -21,7 +21,7 @@
     --radius-lg: 24px;
     --radius-md: 16px;
     
-    --font-main: 'Quicksand', sans-serif;
+    --font-main: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol";
     
     --nav-height: 80px;
 }

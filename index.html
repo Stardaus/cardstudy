@@ -3,16 +3,18 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    
+    <!-- Security: CSP -->
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' https:;">
+    
     <title>Flashcard Fun</title>
     <link rel="manifest" href="manifest.json">
     <meta name="theme-color" content="#FFF9F0">
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     
-    <!-- Google Fonts: Quicksand for that rounded, friendly look -->
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Quicksand:wght@500;700&display=swap" rel="stylesheet">
+    <!-- Fonts: Removed Google Fonts for security/offline. Using system fonts fallback in CSS if needed, or Quicksand matches could be locally served if we had them. -->
+    <!-- Ideally: <link href="css/fonts.css" rel="stylesheet"> -->
     
     <link rel="stylesheet" href="css/style.css">
 </head>
@@ -32,9 +34,9 @@
                 <span class="icon">🏠</span>
                 <span class="label">Home</span>
             </button>
-            <button class="nav-btn" data-target="study">
-                <span class="icon">✨</span>
-                <span class="label">Play</span>
+            <button class="nav-btn" data-target="game">
+                <span class="icon">🎮</span>
+                <span class="label">Quiz</span>
             </button>
             <button class="nav-btn" data-target="settings">
                 <span class="icon">⚙️</span>
@@ -43,9 +45,8 @@
         </nav>
     </div>
 
-    <!-- External Libs -->
-    <script src="https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js"></script>
-    <script src="https://unpkg.com/idb@7.1.1/build/umd.js"></script>
+    <!-- External Libs (Local) -->
+    <script src="js/vendor/papaparse.min.js"></script>
     
     <!-- App -->
     <script type="module" src="js/app.js"></script>

@@ -1,19 +1,46 @@
-const CACHE_NAME = 'flashcard-fun-v1';
+const CACHE_NAME = 'flashcard-fun-v4'; // Bumped version
 const ASSETS = [
   './',
   './index.html',
   './css/style.css',
   './js/app.js',
+  './js/vendor/papaparse.min.js',
+  './js/vendor/idb.js',
+  './js/vendor/wrap-idb-value.js', // Added missing dependency
   './manifest.json',
-  'https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js',
-  'https://unpkg.com/idb@7.1.1/build/umd.js',
-  'https://fonts.googleapis.com/css2?family=Quicksand:wght@500;700&display=swap'
+  './assets/icon-192.png',
+  './assets/icon-512.png'
 ];
 
+// 1. Install: Cache assets and force immediate activation
 self.addEventListener('install', (e) => {
-    e.waitUntil(caches.open(CACHE_NAME).then(cache => cache.addAll(ASSETS)));
+    e.waitUntil(
+        caches.open(CACHE_NAME).then(cache => {
+            return cache.addAll(ASSETS);
+        })
+    );
+    self.skipWaiting(); // Force this SW to become the active one
 });
 
+// 2. Activate: Clean up old caches
+self.addEventListener('activate', (e) => {
+    e.waitUntil(
+        caches.keys().then(keys => {
+            return Promise.all(
+                keys.map(key => {
+                    if (key !== CACHE_NAME) {
+                        // Delete old cache versions (e.g. v1, v2)
+                        return caches.delete(key);
+                    }
+                })
+            );
+        }).then(() => {
+            return self.clients.claim(); // Take control of all clients immediately
+        })
+    );
+});
+
+// 3. Fetch: Serve from Cache, fall back to Network
 self.addEventListener('fetch', (e) => {
     e.respondWith(
         caches.match(e.request).then(response => response || fetch(e.request))
