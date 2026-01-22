@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
     
     <!-- Security: CSP -->
     <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' https:;">
@@ -10,6 +10,7 @@
     <title>Flashcard Fun</title>
     <link rel="manifest" href="manifest.json">
     <meta name="theme-color" content="#FFF9F0">
+    <meta name="mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     
@@ -20,6 +21,7 @@
 </head>
 <body>
     <div id="app">
+        <div id="offline-indicator" class="offline-banner">Offline Mode</div>
         <!-- Views will be injected here -->
         <main id="main-content">
             <!-- Loading State -->

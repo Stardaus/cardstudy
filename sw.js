@@ -12,17 +12,24 @@ const ASSETS = [
     './assets/icon-512.png'
 ];
 
-// 1. Install: Cache assets and force immediate activation
+// 1. Install: Cache assets
 self.addEventListener('install', (e) => {
     e.waitUntil(
         caches.open(CACHE_NAME).then(cache => {
             return cache.addAll(ASSETS);
         })
     );
-    self.skipWaiting(); // Force this SW to become the active one
 });
 
 // 2. Activate: Clean up old caches
+// (Handled below)
+
+// 4. Handle skipWaiting message
+self.addEventListener('message', (event) => {
+    if (event.data && event.data.type === 'SKIP_WAITING') {
+        self.skipWaiting();
+    }
+});
 self.addEventListener('activate', (e) => {
     e.waitUntil(
         caches.keys().then(keys => {

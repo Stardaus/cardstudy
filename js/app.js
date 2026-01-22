@@ -11,6 +11,33 @@ const STORE_USERS = 'users';
 const STORE_STATS = 'user_stats';
 const INTERVALS = [1, 1440, 4320, 10080, 20160, 43200]; // Minutes: 1m, 1d, 3d, 7d, 14d, 30d
 
+// --- VALIDATION ---
+const validate = {
+    user: (u) => {
+        if (!u || typeof u !== 'object') return null;
+        if (typeof u.id !== 'string' || u.id.length > 50) return null;
+        if (typeof u.name !== 'string' || u.name.length < 1 || u.name.length > 30) return null;
+        if (typeof u.avatar !== 'string' || u.avatar.length > 10) return null;
+        return {
+            id: u.id,
+            name: u.name,
+            avatar: u.avatar,
+            color: typeof u.color === 'string' ? u.color : '#FFB7B2'
+        };
+    },
+    card: (c) => {
+        if (!c || typeof c !== 'object') return null;
+        if (!c.id || !c.question || !c.answer) return null;
+        return {
+            id: String(c.id).substring(0, 100),
+            subject: String(c.subject || 'Uncategorized').substring(0, 50).trim(),
+            question: String(c.question).substring(0, 2000),
+            answer: String(c.answer).substring(0, 2000),
+            notes: String(c.notes || '').substring(0, 5000)
+        };
+    }
+};
+
 // --- STATE ---
 const state = {
     view: 'home',
@@ -77,28 +104,36 @@ async function init() {
     // Update Avatar UI if existing
     updateAvatarUI();
 
-    // 3. Register Service Worker
-    // 3. Register Service Worker with Auto Update Logic
+    // 3. Register Service Worker with User Intent Update Logic
     if ('serviceWorker' in navigator) {
         const reg = await navigator.serviceWorker.register('./sw.js');
+
+        const promptUpdate = (worker) => {
+            showToast('New version available!', 0, 'Update', () => {
+                worker.postMessage({ type: 'SKIP_WAITING' });
+            });
+        };
+
+        if (reg.waiting) {
+            promptUpdate(reg.waiting);
+        }
+
+        reg.addEventListener('updatefound', () => {
+            const newWorker = reg.installing;
+            newWorker.addEventListener('statechange', () => {
+                if (newWorker.state === 'installed' && navigator.serviceWorker.controller) {
+                    promptUpdate(newWorker);
+                }
+            });
+        });
 
         // Listen for updates (when a new SW takes over)
         let refreshing = false;
         navigator.serviceWorker.addEventListener('controllerchange', () => {
             if (refreshing) return;
             refreshing = true;
-            // Optional: Auto refresh or Toast
-            // window.location.reload(); 
-            // For better UX, let's show a toast that says "Update Done" but we force reload if they click
-            showToast('New version installed! Reloading...', 3000);
-            setTimeout(() => window.location.reload(), 1500);
+            window.location.reload();
         });
-
-        // Also check if there is one waiting
-        if (reg.waiting) {
-            // There is already a new one waiting
-            // We can notify user? sw.js skips waiting so this hits rarely
-        }
     }
 
     // 4. Load Home
@@ -180,7 +215,8 @@ function renderSafeHtml(container, content) {
 
 async function renderHome() {
     const meta = await state.db.get(STORE_META, 'sync_info');
-    const allCards = await state.db.getAll(STORE_CARDS);
+    const rawCards = await state.db.getAll(STORE_CARDS);
+    const allCards = rawCards.map(validate.card).filter(Boolean);
 
     // 1. Process Subjects
     const subjectMap = new Map();
@@ -211,7 +247,7 @@ async function renderHome() {
     container.appendChild(icon);
 
     // User Avatar (Top Right)
-    const avatar = createElement('div', 'avatar-btn', state.currentUser ? state.currentUser.avatar : '👤');
+    const avatar = createElement('button', 'avatar-btn', state.currentUser ? state.currentUser.avatar : '👤');
     avatar.id = 'user-avatar-btn';
     avatar.style.position = 'absolute';
     avatar.style.top = '20px';
@@ -222,6 +258,7 @@ async function renderHome() {
     avatar.style.padding = '8px';
     avatar.style.borderRadius = '50%';
     avatar.style.boxShadow = '0 2px 5px rgba(0,0,0,0.1)';
+    avatar.setAttribute('aria-label', 'Select User Profile');
     avatar.addEventListener('click', () => navigate('user-select'));
     container.appendChild(avatar);
 
@@ -238,7 +275,7 @@ async function renderHome() {
     }
 
     // All Cards Button
-    const allBtn = document.createElement('div');
+    const allBtn = document.createElement('button');
     allBtn.className = 'subject-card';
     allBtn.style.width = '100%';
     allBtn.style.flexDirection = 'row';
@@ -246,6 +283,7 @@ async function renderHome() {
     allBtn.style.padding = '15px 30px';
     allBtn.style.marginBottom = '10px';
     allBtn.style.borderBottom = '4px solid var(--primary)';
+    allBtn.setAttribute('aria-label', 'Study everything');
 
     // Content Wrapper
     const allContent = document.createElement('div');
@@ -285,7 +323,8 @@ async function renderHome() {
     const grid = createElement('div', 'subject-grid');
 
     subjectMap.forEach((count, subj) => {
-        const subCard = createElement('div', 'subject-card');
+        const subCard = createElement('button', 'subject-card');
+        subCard.setAttribute('aria-label', `Study ${subj}`);
 
         const subIcon = createElement('div', 'subject-icon', getSubjectIcon(subj));
         subCard.appendChild(subIcon);
@@ -390,7 +429,7 @@ async function renderUserSelect() {
     const grid = createElement('div', 'subject-grid'); // Reuse grid style
 
     // Guest Option
-    const guestCard = createElement('div', 'subject-card');
+    const guestCard = createElement('button', 'subject-card');
     guestCard.style.borderBottom = '4px solid #ccc';
     guestCard.appendChild(createElement('div', 'subject-icon', '👤'));
     guestCard.appendChild(createElement('div', 'subject-name', 'Guest'));
@@ -399,7 +438,7 @@ async function renderUserSelect() {
 
     // Existing Users
     users.forEach(user => {
-        const card = createElement('div', 'subject-card');
+        const card = createElement('button', 'subject-card');
         card.style.borderBottom = `4px solid ${user.color || 'var(--primary)'}`;
         card.appendChild(createElement('div', 'subject-icon', user.avatar));
         card.appendChild(createElement('div', 'subject-name', user.name));
@@ -413,7 +452,7 @@ async function renderUserSelect() {
     });
 
     // New User
-    const newCard = createElement('div', 'subject-card');
+    const newCard = createElement('button', 'subject-card');
     newCard.style.border = '2px dashed #aaa';
     newCard.style.background = 'transparent';
     newCard.appendChild(createElement('div', 'subject-icon', '➕'));
@@ -446,16 +485,16 @@ function renderCreateUser() {
     avGrid.style.flexWrap = 'wrap';
     avGrid.style.justifyContent = 'center';
 
-    avatars.forEach(av => {
-        const btn = createElement('div', null, av);
-        btn.style.fontSize = '2rem';
-        btn.style.cursor = 'pointer';
-        btn.style.padding = '5px';
-        btn.style.borderRadius = '50%';
-        btn.style.border = '2px solid transparent';
-
-        if (av === selectedAvatar) btn.style.borderColor = 'var(--primary)';
-
+        avatars.forEach(av => {
+            const btn = createElement('button', 'avatar-picker-btn', av);
+            btn.style.fontSize = '2rem';
+            btn.style.cursor = 'pointer';
+            btn.style.padding = '5px';
+            btn.style.borderRadius = '50%';
+            btn.style.border = '2px solid transparent';
+            btn.setAttribute('aria-label', `Select avatar ${av}`);
+    
+            if (av === selectedAvatar) btn.style.borderColor = 'var(--primary)';
         btn.addEventListener('click', () => {
             Array.from(avGrid.children).forEach(c => c.style.borderColor = 'transparent');
             btn.style.borderColor = 'var(--primary)';
@@ -483,11 +522,12 @@ async function renderGame() {
     // 1. Build Queue (similar to study but focused on Quiz)
     // We reuse the logic but store in gameQueue
     const now = Date.now();
-    const allCards = await state.db.getAll(STORE_CARDS);
+    const rawCards = await state.db.getAll(STORE_CARDS);
+    const allCards = rawCards.map(validate.card).filter(Boolean);
 
     // Filter
     const filteredCards = state.currentSubject
-        ? allCards.filter(c => (c.subject || 'Uncategorized').trim() === state.currentSubject)
+        ? allCards.filter(c => c.subject === state.currentSubject)
         : allCards;
 
     state.gameQueue = [];
@@ -761,11 +801,12 @@ async function renderStudy() {
     // 1. Build Queue
     const now = Date.now();
 
-    const allCards = await state.db.getAll(STORE_CARDS);
+    const rawCards = await state.db.getAll(STORE_CARDS);
+    const allCards = rawCards.map(validate.card).filter(Boolean);
 
     // Filter by Subject if selected
     const filteredCards = state.currentSubject
-        ? allCards.filter(c => (c.subject || 'Uncategorized').trim() === state.currentSubject)
+        ? allCards.filter(c => c.subject === state.currentSubject)
         : allCards;
 
     state.queue = [];
@@ -950,7 +991,8 @@ function renderCardStage() {
 
     // Stage
     const stage = createElement('div', 'flashcard-stage');
-    const flashcard = createElement('div', 'flashcard');
+    const flashcard = createElement('button', 'flashcard');
+    flashcard.setAttribute('aria-label', 'Flashcard, tap to flip');
     flashcard.addEventListener('click', function () {
         this.classList.toggle('flipped');
     });
@@ -1085,6 +1127,11 @@ async function syncCards() {
     }
 
     try {
+        const countExisting = await state.db.count(STORE_CARDS);
+        if (countExisting > 0) {
+            if (!confirm(`You have ${countExisting} cards. Syncing will update or merge them. Continue?`)) return;
+        }
+        
         showToast('Syncing...');
         const resp = await fetch(url);
         const text = await resp.text();
@@ -1109,8 +1156,9 @@ async function syncCards() {
 
                 let count = 0;
                 for (const row of rows) {
-                    if (row.id && row.question && row.answer) {
-                        await tx.store.put(row);
+                    const clean = validate.card(row);
+                    if (clean) {
+                        await tx.store.put(clean);
                         count++;
                     }
                 }
@@ -1137,19 +1185,44 @@ async function resetAll() {
     navigate('home');
 }
 
-function showToast(msg) {
+function showToast(msg, duration = 2000, actionLabel = null, actionCb = null) {
     const toast = document.createElement('div');
     toast.className = 'toast';
-    toast.textContent = msg;
+    
+    const text = document.createElement('span');
+    text.textContent = msg;
+    toast.appendChild(text);
+
+    if (actionLabel && actionCb) {
+        const btn = document.createElement('button');
+        btn.textContent = actionLabel;
+        btn.style.marginLeft = '15px';
+        btn.style.background = 'var(--primary)';
+        btn.style.border = 'none';
+        btn.style.borderRadius = '20px';
+        btn.style.color = 'white';
+        btn.style.padding = '5px 12px';
+        btn.style.cursor = 'pointer';
+        btn.style.fontWeight = 'bold';
+        btn.onclick = (e) => {
+            e.stopPropagation();
+            actionCb();
+            toast.remove();
+        };
+        toast.appendChild(btn);
+    }
+
     document.body.appendChild(toast);
 
     // Animate
     requestAnimationFrame(() => toast.classList.add('visible'));
 
-    setTimeout(() => {
-        toast.classList.remove('visible');
-        setTimeout(() => toast.remove(), 500);
-    }, 2000);
+    if (duration > 0) {
+        setTimeout(() => {
+            toast.classList.remove('visible');
+            setTimeout(() => toast.remove(), 500);
+        }, duration);
+    }
 }
 
 // --- USER LOGIC ---
@@ -1158,7 +1231,8 @@ async function loadUser() {
     const lastId = localStorage.getItem('lastUserId');
     if (lastId) {
         try {
-            const user = await state.db.get(STORE_USERS, lastId);
+            const raw = await state.db.get(STORE_USERS, lastId);
+            const user = validate.user(raw);
             if (user) {
                 state.currentUser = user;
                 console.log('Logged in as:', user.name);
@@ -1207,4 +1281,14 @@ async function createUser(name, avatar) {
 }
 
 // Start
+function updateOnlineStatus() {
+    const indicator = document.getElementById('offline-indicator');
+    if (indicator) {
+        indicator.classList.toggle('visible', !navigator.onLine);
+    }
+}
+window.addEventListener('online', updateOnlineStatus);
+window.addEventListener('offline', updateOnlineStatus);
+updateOnlineStatus();
+
 init();
