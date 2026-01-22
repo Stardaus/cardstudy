@@ -2,6 +2,7 @@ const CACHE_NAME = 'flashcard-fun-v5'; // Bumped version
 const ASSETS = [
     './',
     './index.html',
+    './config.json',
     './css/style.css',
     './js/app.js',
     './js/vendor/papaparse.min.js',

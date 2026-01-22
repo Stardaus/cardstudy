@@ -41,6 +41,7 @@ const validate = {
 // --- STATE ---
 const state = {
     view: 'home',
+    config: null,
     queue: [],
     currentCardIndex: 0,
     currentSubject: null, // null = All
@@ -84,6 +85,9 @@ async function init() {
             }
         }
     });
+
+    // 1.2 Load Config
+    await loadConfig();
 
     // 1.5 Load User (or Guest)
     await loadUser();
@@ -375,13 +379,22 @@ function renderSettings() {
     // Sync Panel
     const syncPanel = createElement('div', 'card-panel');
     syncPanel.appendChild(createElement('h2', null, 'Sync Cards'));
-    syncPanel.appendChild(createElement('p', null, 'Paste your Google Sheet Link below:'));
-
-    const input = createElement('input');
-    input.type = 'text';
-    input.id = 'csv-url';
-    input.placeholder = 'https://docs.google.com/...';
-    syncPanel.appendChild(input);
+    
+    if (state.config && state.config.sheetUrl) {
+        syncPanel.appendChild(createElement('p', null, 'Source: Configured via File'));
+        const link = createElement('div', null, 'Linked Google Sheet');
+        link.style.color = 'var(--primary)';
+        link.style.marginBottom = '15px';
+        link.style.fontSize = '0.9rem';
+        syncPanel.appendChild(link);
+    } else {
+        syncPanel.appendChild(createElement('p', null, 'Paste your Google Sheet Link below:'));
+        const input = createElement('input');
+        input.type = 'text';
+        input.id = 'csv-url';
+        input.placeholder = 'https://docs.google.com/...';
+        syncPanel.appendChild(input);
+    }
 
     const syncBtn = createElement('button', 'btn btn-secondary', 'Sync Now');
     syncBtn.addEventListener('click', syncCards);
@@ -1117,8 +1130,16 @@ async function grade(known) {
 }
 
 async function syncCards() {
-    const urlInput = document.getElementById('csv-url');
-    let url = urlInput.value.trim();
+    let url;
+    
+    if (state.config && state.config.sheetUrl) {
+        url = state.config.sheetUrl;
+    } else {
+        const urlInput = document.getElementById('csv-url');
+        if (urlInput) {
+            url = urlInput.value.trim();
+        }
+    }
 
     if (!url) return showToast('Please enter a URL');
 
@@ -1237,6 +1258,21 @@ function showToast(msg, duration = 2000, actionLabel = null, actionCb = null) {
 }
 
 // --- USER LOGIC ---
+
+async function loadConfig() {
+    try {
+        const resp = await fetch('./config.json');
+        if (resp.ok) {
+            state.config = await resp.json();
+            console.log('Config loaded:', state.config);
+            if (state.config.appTitle) {
+                document.title = state.config.appTitle;
+            }
+        }
+    } catch (e) {
+        console.warn('No config.json found or invalid, using defaults.');
+    }
+}
 
 async function loadUser() {
     const lastId = localStorage.getItem('lastUserId');
