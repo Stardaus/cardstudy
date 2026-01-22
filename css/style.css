@@ -152,7 +152,7 @@ input:focus {
 }
 
 /* Reset for custom button-like elements converted to actual buttons */
-button.subject-card, button.avatar-btn, button.avatar-picker-btn, button.flashcard {
+button.subject-card, button.avatar-btn, button.avatar-picker-btn {
     font-family: inherit;
     color: inherit;
     border: none;
@@ -238,6 +238,8 @@ button.flashcard {
     /* Reduced min-height to prevent pushing content off screen on small devices */
     min-height: 250px; 
     padding: 10px 0;
+    margin-bottom: 20px; /* Ensure spacing */
+    z-index: 1;
 }
 
 .flashcard {

@@ -991,10 +991,19 @@ function renderCardStage() {
 
     // Stage
     const stage = createElement('div', 'flashcard-stage');
-    const flashcard = createElement('button', 'flashcard');
+    const flashcard = createElement('div', 'flashcard'); // Revert to div for layout safety
+    flashcard.setAttribute('role', 'button');
+    flashcard.setAttribute('tabindex', '0');
     flashcard.setAttribute('aria-label', 'Flashcard, tap to flip');
-    flashcard.addEventListener('click', function () {
-        this.classList.toggle('flipped');
+    
+    // Flip handlers
+    const flip = () => flashcard.classList.toggle('flipped');
+    flashcard.addEventListener('click', flip);
+    flashcard.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault();
+            flip();
+        }
     });
 
     // Front
@@ -1051,6 +1060,8 @@ function renderCardStage() {
     btnGrid.style.gridTemplateColumns = '1fr 1fr';
     btnGrid.style.gap = '15px';
     btnGrid.style.marginTop = '20px';
+    btnGrid.style.position = 'relative'; /* Ensure z-index works */
+    btnGrid.style.zIndex = '10'; /* Sit above flashcard 3D space */
 
     const helpBtn = createElement('button', 'btn btn-primary', 'Help!');
     helpBtn.style.backgroundColor = 'var(--error)';
