@@ -373,62 +373,62 @@ function getSubjectIcon(subject) {
 }
 
 function renderSettings() {
-    const title = createElement('h1', null, 'Settings');
+    const title = createElement('h1', null, 'Options');
     el.main.appendChild(title);
 
-    // Sync Panel
+    // 1. Content / Sync
     const syncPanel = createElement('div', 'card-panel');
-    syncPanel.appendChild(createElement('h2', null, 'Sync Cards'));
     
+    // Check if Managed Mode (Config exists)
     if (state.config && state.config.sheetUrl) {
-        syncPanel.appendChild(createElement('p', null, 'Source: Configured via File'));
-        const link = createElement('div', null, 'Linked Google Sheet');
-        link.style.color = 'var(--primary)';
-        link.style.marginBottom = '15px';
-        link.style.fontSize = '0.9rem';
-        syncPanel.appendChild(link);
+        syncPanel.appendChild(createElement('h2', null, 'Content'));
+        syncPanel.appendChild(createElement('p', null, 'Get the latest flashcards from the server.'));
+        
+        const syncBtn = createElement('button', 'btn btn-secondary', 'Update Cards');
+        syncBtn.addEventListener('click', syncCards);
+        syncPanel.appendChild(syncBtn);
     } else {
-        syncPanel.appendChild(createElement('p', null, 'Paste your Google Sheet Link below:'));
+        // Unmanaged / Manual Mode
+        syncPanel.appendChild(createElement('h2', null, 'Setup Source'));
+        syncPanel.appendChild(createElement('p', null, 'Paste your Google Sheet CSV Link:'));
+        
         const input = createElement('input');
         input.type = 'text';
         input.id = 'csv-url';
-        input.placeholder = 'https://docs.google.com/...';
+        input.placeholder = 'https://...';
         syncPanel.appendChild(input);
+
+        const syncBtn = createElement('button', 'btn btn-secondary', 'Sync Now');
+        syncBtn.addEventListener('click', syncCards);
+        syncPanel.appendChild(syncBtn);
+        
+        // Help text only needed for manual
+        const helpP = createElement('p', null);
+        helpP.style.fontSize = '0.8rem';
+        helpP.style.color = '#888';
+        helpP.textContent = 'Required columns: id, subject, question, answer';
+        syncPanel.appendChild(helpP);
     }
-
-    const syncBtn = createElement('button', 'btn btn-secondary', 'Sync Now');
-    syncBtn.addEventListener('click', syncCards);
-    syncPanel.appendChild(syncBtn);
-
-    const helpP = createElement('p', null);
-    helpP.style.fontSize = '0.8rem';
-    helpP.style.marginTop = '10px';
-    helpP.style.color = '#888';
-    helpP.textContent = 'Make sure your sheet has: ';
-    const code = createElement('code', null, 'id, subject, question, answer, notes');
-    helpP.appendChild(code);
-    syncPanel.appendChild(helpP);
-
     el.main.appendChild(syncPanel);
 
-    // Reset Panel
-    const resetPanel = createElement('div', 'card-panel');
-    resetPanel.appendChild(createElement('h2', null, 'Reset'));
-
-    const resetBtn = createElement('button', 'btn btn-primary', 'Delete Everything');
-    resetBtn.style.backgroundColor = 'var(--error)';
-    resetBtn.addEventListener('click', resetAll);
-    resetPanel.appendChild(resetBtn);
-
-    el.main.appendChild(resetPanel);
-
-    // User Debug
+    // 2. Profile
     const userPanel = createElement('div', 'card-panel');
-    userPanel.appendChild(createElement('h2', null, 'User'));
-    const switchBtn = createElement('button', 'btn btn-secondary', 'Switch User');
+    userPanel.appendChild(createElement('h2', null, 'Profile'));
+    const switchBtn = createElement('button', 'btn btn-primary', 'Switch User');
     switchBtn.addEventListener('click', () => navigate('user-select'));
     userPanel.appendChild(switchBtn);
     el.main.appendChild(userPanel);
+
+    // 3. Data Zone
+    const resetPanel = createElement('div', 'card-panel');
+    resetPanel.appendChild(createElement('h2', null, 'Data'));
+    const resetBtn = createElement('button', 'btn', 'Reset App');
+    resetBtn.style.border = '2px solid var(--error)';
+    resetBtn.style.color = 'var(--error)';
+    resetBtn.style.background = 'transparent';
+    resetBtn.addEventListener('click', resetAll);
+    resetPanel.appendChild(resetBtn);
+    el.main.appendChild(resetPanel);
 }
 
 // --- USER VIEWS ---
