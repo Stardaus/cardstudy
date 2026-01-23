@@ -1,4 +1,4 @@
-// Modules
+﻿// Modules
 // PapaParse is loaded via script tag in index.html as a global: window.Papa
 import { openDB } from './vendor/idb.js';
 
@@ -51,6 +51,9 @@ const state = {
     gameIndex: 0,
     sessionScore: 0,
     sessionStreak: 0,
+    // Study State
+    studyStreak: 0,
+    studySessionScore: 0,
     db: null
 };
 
@@ -63,9 +66,37 @@ const el = {
     userAvatar: null
 };
 
+// --- XP LOGIC ---
+function getLevelInfo(xp) {
+    if (!xp) xp = 0;
+    // Formula: Level = floor(sqrt(xp / 25)) + 1
+    // Lvl 1: 0-24
+    // Lvl 2: 25-99
+    // Lvl 3: 100-224
+    const level = Math.floor(Math.sqrt(xp / 25)) + 1;
+
+    // XP for current level start
+    // (level - 1)^2 * 25
+    const startXP = Math.pow(level - 1, 2) * 25;
+
+    // XP for next level
+    // level^2 * 25
+    const nextXP = Math.pow(level, 2) * 25;
+
+    return {
+        level,
+        currentXP: xp,
+        levelStartXP: startXP,
+        nextLevelXP: nextXP,
+        progress: xp - startXP,
+        needed: nextXP - startXP,
+        percent: ((xp - startXP) / (nextXP - startXP)) * 100
+    };
+}
+
 // --- INITIALIZATION ---
 async function init() {
-    console.log('✨ Flashcard Fun Starting...');
+    console.log('âœ¨ Flashcard Fun Starting...');
 
     // 1. Setup DB
     state.db = await openDB(DB_NAME, 2, {
@@ -175,6 +206,8 @@ async function render(view) {
         renderCreateUser();
     } else if (view === 'game') {
         await renderGame();
+    } else if (view === 'stats') {
+        await renderStats();
     }
 }
 
@@ -247,7 +280,7 @@ async function renderHome() {
     const icon = document.createElement('div');
     icon.style.fontSize = '3rem';
     icon.style.marginBottom = '10px';
-    icon.textContent = '🦄';
+    icon.textContent = '🧠';
     container.appendChild(icon);
 
     // User Avatar (Top Right)
@@ -265,6 +298,21 @@ async function renderHome() {
     avatar.setAttribute('aria-label', 'Select User Profile');
     avatar.addEventListener('click', () => navigate('user-select'));
     container.appendChild(avatar);
+
+    // Stats Button (Top Left)
+    const statsBtn = createElement('button', 'avatar-btn', '📊');
+    statsBtn.style.position = 'absolute';
+    statsBtn.style.top = '20px';
+    statsBtn.style.left = '20px';
+    statsBtn.style.fontSize = '1.5rem';
+    statsBtn.style.cursor = 'pointer';
+    statsBtn.style.background = '#FFF';
+    statsBtn.style.padding = '8px';
+    statsBtn.style.borderRadius = '50%';
+    statsBtn.style.boxShadow = '0 2px 5px rgba(0,0,0,0.1)';
+    statsBtn.setAttribute('aria-label', 'View Statistics');
+    statsBtn.addEventListener('click', () => navigate('stats'));
+    container.appendChild(statsBtn);
 
     // Title
     container.appendChild(createElement('h1', null, 'Pick a Topic!'));
@@ -314,7 +362,7 @@ async function renderHome() {
     const playIcon = document.createElement('div');
     playIcon.style.fontSize = '1.5rem';
     playIcon.style.color = 'var(--primary)';
-    playIcon.textContent = '▶';
+    playIcon.textContent = '▶️';
     allBtn.appendChild(playIcon);
 
     allBtn.addEventListener('click', () => {
@@ -372,18 +420,97 @@ function getSubjectIcon(subject) {
     return '✨';
 }
 
+async function renderStats() {
+    // Header
+    const title = createElement('h1', null, 'Your Progress');
+    el.main.appendChild(title);
+
+    // 1. Current Session / User Stats
+    let totalScore = 0;
+    if (state.currentUser) {
+        const stats = await state.db.get(STORE_STATS, state.currentUser.id);
+        if (stats) totalScore = stats.totalScore || 0;
+    }
+
+    const scoreCard = createElement('div', 'stats-header');
+    scoreCard.appendChild(createElement('div', null, 'Total Score'));
+    const scoreVal = createElement('div', 'stats-score', totalScore.toLocaleString());
+    scoreCard.appendChild(scoreVal);
+
+    if (!state.currentUser) {
+        scoreCard.appendChild(createElement('p', null, '(Guest Mode - Score not saved long term)'));
+    }
+    el.main.appendChild(scoreCard);
+
+    // 2. Leaderboard
+    const lbPanel = createElement('div', 'card-panel');
+    lbPanel.appendChild(createElement('h2', null, 'Leaderboard'));
+
+    const users = await state.db.getAll(STORE_USERS);
+    const allStats = await state.db.getAll(STORE_STATS);
+
+    // Merge
+    const ranking = users.map(u => {
+        const s = allStats.find(st => st.userId === u.id);
+        return {
+            name: u.name,
+            avatar: u.avatar,
+            score: s ? (s.totalScore || 0) : 0
+        };
+    });
+
+    // Sort
+    ranking.sort((a, b) => b.score - a.score);
+
+    if (ranking.length === 0) {
+        lbPanel.appendChild(createElement('p', null, 'No players yet.'));
+    } else {
+        ranking.forEach((r, i) => {
+            const row = createElement('div', 'leaderboard-item');
+
+            const left = createElement('div', null);
+            left.style.display = 'flex';
+            left.style.alignItems = 'center';
+
+            const badge = createElement('div', `rank-badge rank-${i + 1}`, `#${i + 1}`);
+            // Fallback for > 3
+            if (i > 2) {
+                badge.className = 'rank-badge';
+                badge.style.background = '#EEE';
+                badge.style.color = '#555';
+            }
+            left.appendChild(badge);
+
+            const name = createElement('span', null, `${r.avatar} ${r.name}`);
+            name.style.fontWeight = 'bold';
+            left.appendChild(name);
+
+            row.appendChild(left);
+            row.appendChild(createElement('span', null, r.score.toLocaleString()));
+
+            lbPanel.appendChild(row);
+        });
+    }
+    el.main.appendChild(lbPanel);
+
+    // 3. Back Button
+    const backBtn = createElement('button', 'btn btn-primary', 'Back Home');
+    backBtn.addEventListener('click', () => navigate('home'));
+    el.main.appendChild(backBtn);
+}
+
 function renderSettings() {
     const title = createElement('h1', null, 'Options');
     el.main.appendChild(title);
 
     // 1. Content / Sync
     const syncPanel = createElement('div', 'card-panel');
-    
+
     // Check if Managed Mode (Config exists)
     if (state.config && state.config.sheetUrl) {
         syncPanel.appendChild(createElement('h2', null, 'Content'));
         syncPanel.appendChild(createElement('p', null, 'Get the latest flashcards from the server.'));
-        
+
         const syncBtn = createElement('button', 'btn btn-secondary', 'Update Cards');
         syncBtn.addEventListener('click', syncCards);
         syncPanel.appendChild(syncBtn);
@@ -391,7 +518,7 @@ function renderSettings() {
         // Unmanaged / Manual Mode
         syncPanel.appendChild(createElement('h2', null, 'Setup Source'));
         syncPanel.appendChild(createElement('p', null, 'Paste your Google Sheet CSV Link:'));
-        
+
         const input = createElement('input');
         input.type = 'text';
         input.id = 'csv-url';
@@ -401,7 +528,7 @@ function renderSettings() {
         const syncBtn = createElement('button', 'btn btn-secondary', 'Sync Now');
         syncBtn.addEventListener('click', syncCards);
         syncPanel.appendChild(syncBtn);
-        
+
         // Help text only needed for manual
         const helpP = createElement('p', null);
         helpP.style.fontSize = '0.8rem';
@@ -453,12 +580,33 @@ async function renderUserSelect() {
     users.forEach(user => {
         const card = createElement('button', 'subject-card');
         card.style.borderBottom = `4px solid ${user.color || 'var(--primary)'}`;
+        card.style.position = 'relative';
         card.appendChild(createElement('div', 'subject-icon', user.avatar));
         card.appendChild(createElement('div', 'subject-name', user.name));
 
-        // Delete button (small)
-        // const del = createElement('span', null, 'x');
-        // ... simplistic for now
+        // Delete button
+        const delBtn = createElement('button', null, '×');
+        delBtn.style.position = 'absolute';
+        delBtn.style.top = '5px';
+        delBtn.style.right = '5px';
+        delBtn.style.background = 'var(--error)';
+        delBtn.style.color = 'white';
+        delBtn.style.border = 'none';
+        delBtn.style.borderRadius = '50%';
+        delBtn.style.width = '24px';
+        delBtn.style.height = '24px';
+        delBtn.style.fontSize = '18px';
+        delBtn.style.cursor = 'pointer';
+        delBtn.style.display = 'flex';
+        delBtn.style.alignItems = 'center';
+        delBtn.style.justifyContent = 'center';
+        delBtn.style.lineHeight = '1';
+        delBtn.setAttribute('aria-label', `Delete ${user.name}`);
+        delBtn.addEventListener('click', async (e) => {
+            e.stopPropagation();
+            await deleteUser(user.id);
+        });
+        card.appendChild(delBtn);
 
         card.addEventListener('click', () => switchUser(user.id));
         grid.appendChild(card);
@@ -498,16 +646,16 @@ function renderCreateUser() {
     avGrid.style.flexWrap = 'wrap';
     avGrid.style.justifyContent = 'center';
 
-        avatars.forEach(av => {
-            const btn = createElement('button', 'avatar-picker-btn', av);
-            btn.style.fontSize = '2rem';
-            btn.style.cursor = 'pointer';
-            btn.style.padding = '5px';
-            btn.style.borderRadius = '50%';
-            btn.style.border = '2px solid transparent';
-            btn.setAttribute('aria-label', `Select avatar ${av}`);
-    
-            if (av === selectedAvatar) btn.style.borderColor = 'var(--primary)';
+    avatars.forEach(av => {
+        const btn = createElement('button', 'avatar-picker-btn', av);
+        btn.style.fontSize = '2rem';
+        btn.style.cursor = 'pointer';
+        btn.style.padding = '5px';
+        btn.style.borderRadius = '50%';
+        btn.style.border = '2px solid transparent';
+        btn.setAttribute('aria-label', `Select avatar ${av}`);
+
+        if (av === selectedAvatar) btn.style.borderColor = 'var(--primary)';
         btn.addEventListener('click', () => {
             Array.from(avGrid.children).forEach(c => c.style.borderColor = 'transparent');
             btn.style.borderColor = 'var(--primary)';
@@ -999,7 +1147,19 @@ function renderCardStage() {
     info.style.color = 'var(--text-light)';
     info.style.fontWeight = '700';
     info.appendChild(createElement('span', null, `${current} / ${total}`));
-    info.appendChild(createElement('span', null, `Box: ${card.box}`));
+
+    const right = createElement('div');
+    if (state.studyStreak > 1) {
+        const streak = createElement('span', 'streak-counter', `🔥 ${state.studyStreak}`);
+        // Simple pop animation
+        setTimeout(() => streak.classList.add('pop-anim'), 10);
+        right.appendChild(streak);
+    }
+    const boxSpan = createElement('span', null, ` Box: ${card.box}`);
+    boxSpan.style.marginLeft = '10px';
+    right.appendChild(boxSpan);
+
+    info.appendChild(right);
     el.main.appendChild(info);
 
     // Stage
@@ -1008,7 +1168,7 @@ function renderCardStage() {
     flashcard.setAttribute('role', 'button');
     flashcard.setAttribute('tabindex', '0');
     flashcard.setAttribute('aria-label', 'Flashcard, tap to flip');
-    
+
     // Flip handlers
     const flip = () => flashcard.classList.toggle('flipped');
     flashcard.addEventListener('click', flip);
@@ -1109,15 +1269,43 @@ async function grade(known) {
         lastReview: Date.now()
     });
 
-    // Update Score also in Study Mode?
-    // Plan: "Score is +10 per Got It"
-    if (known && state.currentUser) {
-        const stats = (await state.db.get(STORE_STATS, state.currentUser.id)) || { userId: state.currentUser.id, totalScore: 0 };
-        stats.totalScore = (stats.totalScore || 0) + 10;
-        await state.db.put(STORE_STATS, stats);
-    }
+    // Update Score & Streak
+    if (known) {
+        state.studyStreak++;
+        // Formula: 1 XP * streak
+        const xp = state.studyStreak;
+        state.studySessionScore += xp;
 
-    showToast(known ? 'Great Job! 🌟' : 'Keep Trying! 💪');
+        // Trigger Reward
+        triggerConfetti();
+
+        if (state.currentUser) {
+            let stats = await state.db.get(STORE_STATS, state.currentUser.id);
+            if (!stats) stats = { userId: state.currentUser.id, totalScore: 0, totalXP: 0 };
+
+            const oldXP = stats.totalXP || 0;
+            const oldLvl = getLevelInfo(oldXP).level;
+
+            stats.totalXP = oldXP + xp;
+
+            const newLvl = getLevelInfo(stats.totalXP).level;
+
+            await state.db.put(STORE_STATS, stats);
+
+            if (newLvl > oldLvl) {
+                showToast(`LEVEL UP! 🌟 Lvl ${newLvl}`, 4000);
+                triggerConfetti();
+                setTimeout(triggerConfetti, 500);
+            } else {
+                showToast(`Check! +${xp} XP 🔥 ${state.studyStreak}`);
+            }
+        } else {
+            showToast(`Check! +${xp} XP 🔥 ${state.studyStreak}`);
+        }
+    } else {
+        state.studyStreak = 0;
+        showToast('Keep Trying! 💪');
+    }
 
     // Next
     state.currentCardIndex++;
@@ -1129,9 +1317,54 @@ async function grade(known) {
     }
 }
 
+function confetti(root) {
+    // Simple particle explosion
+    const colors = ['#FFD93D', '#FFB7B2', '#B5EAD7', '#C7CEEA'];
+    const count = 30;
+
+    // Center of screen
+    const rect = root.getBoundingClientRect();
+    const centerX = rect.width / 2;
+    const centerY = rect.height / 2;
+
+    for (let i = 0; i < count; i++) {
+        const el = document.createElement('div');
+        el.classList.add('confetti');
+        el.style.backgroundColor = colors[Math.floor(Math.random() * colors.length)];
+        el.style.left = centerX + 'px';
+        el.style.top = centerY + 'px';
+
+        // Random direction
+        const angle = Math.random() * Math.PI * 2;
+        const velocity = 2 + Math.random() * 6;
+        const dx = Math.cos(angle) * velocity;
+        const dy = Math.sin(angle) * velocity;
+
+        root.appendChild(el);
+
+        // Animate
+        let x = 0;
+        let y = 0;
+        let op = 1;
+
+        const anim = setInterval(() => {
+            x += dx;
+            y += dy;
+            op -= 0.02;
+            el.style.transform = `translate(${x}px, ${y}px)`;
+            el.style.opacity = op;
+
+            if (op <= 0) {
+                clearInterval(anim);
+                el.remove();
+            }
+        }, 16);
+    }
+}
+
 async function syncCards() {
     let url;
-    
+
     if (state.config && state.config.sheetUrl) {
         url = state.config.sheetUrl;
     } else {
@@ -1163,7 +1396,7 @@ async function syncCards() {
         if (countExisting > 0) {
             if (!confirm(`You have ${countExisting} cards. Syncing will update or merge them. Continue?`)) return;
         }
-        
+
         showToast('Syncing...');
         const resp = await fetch(url);
         const text = await resp.text();
@@ -1208,11 +1441,39 @@ async function syncCards() {
     }
 }
 
+async function deleteUser(userId) {
+    const user = await state.db.get(STORE_USERS, userId);
+    if (!user) return;
+
+    if (!confirm(`Delete ${user.name}? This will also delete their progress and stats.`)) return;
+
+    // Delete user
+    await state.db.delete(STORE_USERS, userId);
+
+    // Delete their stats
+    await state.db.delete(STORE_STATS, userId);
+
+    // If this was the current user, log out
+    if (state.currentUser && state.currentUser.id === userId) {
+        state.currentUser = null;
+        localStorage.removeItem('lastUserId');
+    }
+
+    showToast(`${user.name} deleted`);
+
+    // Refresh the user selection screen
+    renderUserSelect();
+}
+
 async function resetAll() {
-    if (!confirm('Delete all data?')) return;
+    if (!confirm('Delete all data? This will remove all cards, progress, users, and stats.')) return;
     await state.db.clear(STORE_CARDS);
     await state.db.clear(STORE_PROGRESS);
     await state.db.clear(STORE_META);
+    await state.db.clear(STORE_USERS);
+    await state.db.clear(STORE_STATS);
+    state.currentUser = null;
+    localStorage.removeItem('lastUserId');
     showToast('Reset Complete 🗑️');
     navigate('home');
 }
@@ -1220,7 +1481,7 @@ async function resetAll() {
 function showToast(msg, duration = 2000, actionLabel = null, actionCb = null) {
     const toast = document.createElement('div');
     toast.className = 'toast';
-    
+
     const text = document.createElement('span');
     text.textContent = msg;
     toast.appendChild(text);
@@ -1291,20 +1552,64 @@ async function loadUser() {
 }
 
 async function switchUser(userId) {
-    if (!userId) {
+    if (userId === null) {
         state.currentUser = null;
         localStorage.removeItem('lastUserId');
-        showToast('Switched to Guest');
+        console.log('Switched to Guest');
     } else {
         const user = await state.db.get(STORE_USERS, userId);
         if (user) {
             state.currentUser = user;
             localStorage.setItem('lastUserId', userId);
-            showToast(`Welcome back, ${user.name}!`);
+            console.log('Switched to', user.name);
         }
     }
-    navigate('home');
+    // Reload to refresh everything (simplest)
+    window.location.reload();
 }
+
+function triggerConfetti() {
+    const colors = ['#FFD93D', '#FFB7B2', '#B5EAD7', '#C7CEEA'];
+    const count = 50;
+    const centerX = window.innerWidth / 2;
+    const centerY = window.innerHeight / 2;
+
+    for (let i = 0; i < count; i++) {
+        const el = document.createElement('div');
+        el.classList.add('confetti');
+        el.style.backgroundColor = colors[Math.floor(Math.random() * colors.length)];
+        el.style.position = 'fixed';
+        el.style.left = centerX + 'px';
+        el.style.top = centerY + 'px';
+        el.style.zIndex = '9999';
+        el.style.pointerEvents = 'none';
+
+        const angle = Math.random() * Math.PI * 2;
+        const velocity = 2 + Math.random() * 8;
+        const dx = Math.cos(angle) * velocity;
+        const dy = Math.sin(angle) * velocity;
+
+        document.body.appendChild(el);
+
+        let x = 0;
+        let y = 0;
+        let op = 1;
+
+        const anim = setInterval(() => {
+            x += dx;
+            y += dy;
+            op -= 0.02;
+            el.style.transform = `translate(${x}px, ${y}px)`;
+            el.style.opacity = op;
+
+            if (op <= 0) {
+                clearInterval(anim);
+                el.remove();
+            }
+        }, 16);
+    }
+}
+
 
 async function createUser(name, avatar) {
     const id = crypto.randomUUID();
@@ -1339,3 +1644,150 @@ window.addEventListener('offline', updateOnlineStatus);
 updateOnlineStatus();
 
 init();
+
+// --- NEW STATS RENDERER ---
+async function renderStatsNew() {
+    // Header
+    const title = createElement('h1', null, 'Your Progress');
+    el.main.appendChild(title);
+
+    // 1. Current Session / User Stats
+    let totalScore = 0;
+    let totalXP = 0;
+
+    if (state.currentUser) {
+        let stats = await state.db.get(STORE_STATS, state.currentUser.id);
+        // Fix for missing stats obj
+        if (!stats) {
+            stats = { userId: state.currentUser.id, totalScore: 0, totalXP: 0 };
+        }
+        totalScore = stats.totalScore || 0;
+        totalXP = stats.totalXP || 0;
+    }
+
+    const lvl = getLevelInfo(totalXP);
+
+    const statsCard = createElement('div', 'stats-header');
+
+    // Level Badge
+    const lvlBadge = createElement('div', null, `Level ${lvl.level}`);
+    lvlBadge.style.fontSize = '1.2rem';
+    lvlBadge.style.marginBottom = '10px';
+    lvlBadge.style.textTransform = 'uppercase';
+    lvlBadge.style.letterSpacing = '2px';
+    statsCard.appendChild(lvlBadge);
+
+    // Progress Bar
+    const progContainer = createElement('div', null);
+    progContainer.style.background = 'rgba(255,255,255,0.3)';
+    progContainer.style.borderRadius = '10px';
+    progContainer.style.height = '10px';
+    progContainer.style.width = '100%';
+    progContainer.style.overflow = 'hidden';
+    progContainer.style.marginBottom = '5px';
+
+    const progBar = createElement('div', null);
+    progBar.style.background = '#FFF';
+    progBar.style.height = '100%';
+    progBar.style.width = `${Math.min(100, Math.max(0, lvl.percent))}%`;
+    progBar.style.transition = 'width 0.5s ease-out';
+    progContainer.appendChild(progBar);
+    statsCard.appendChild(progContainer);
+
+    statsCard.appendChild(createElement('div', 'subject-count', `${Math.floor(lvl.percent)}% to Level ${lvl.level + 1}`));
+
+    // Stats Grid
+    const grid = createElement('div', null);
+    grid.style.display = 'grid';
+    grid.style.gridTemplateColumns = '1fr 1fr';
+    grid.style.gap = '10px';
+    grid.style.marginTop = '20px';
+
+    const s1 = createElement('div', null);
+    s1.appendChild(createElement('div', 'subject-count', 'Study XP'));
+    s1.appendChild(createElement('div', 'stats-score', totalXP.toLocaleString()));
+    s1.lastChild.style.fontSize = '1.5rem';
+
+    const s2 = createElement('div', null);
+    s2.appendChild(createElement('div', 'subject-count', 'Quiz Score'));
+    s2.appendChild(createElement('div', 'stats-score', totalScore.toLocaleString()));
+    s2.lastChild.style.fontSize = '1.5rem';
+
+    grid.appendChild(s1);
+    grid.appendChild(s2);
+    statsCard.appendChild(grid);
+
+    if (!state.currentUser) {
+        statsCard.appendChild(createElement('p', null, '(Guest Mode)'));
+    }
+    el.main.appendChild(statsCard);
+
+    // 2. Leaderboard
+    const lbPanel = createElement('div', 'card-panel');
+    lbPanel.appendChild(createElement('h2', null, 'Leaderboard'));
+
+    const users = await state.db.getAll(STORE_USERS);
+    const allStats = await state.db.getAll(STORE_STATS);
+
+    // Merge
+    const ranking = users.map(u => {
+        const s = allStats.find(st => st.userId === u.id);
+        const xp = s ? (s.totalXP || 0) : 0;
+        const score = s ? (s.totalScore || 0) : 0;
+        return {
+            name: u.name,
+            avatar: u.avatar,
+            xp: xp,
+            score: score,
+            level: getLevelInfo(xp).level
+        };
+    });
+
+    // Sort by XP
+    ranking.sort((a, b) => b.xp - a.xp);
+
+    if (ranking.length === 0) {
+        lbPanel.appendChild(createElement('p', null, 'No players yet.'));
+    } else {
+        ranking.forEach((r, i) => {
+            const row = createElement('div', 'leaderboard-item');
+
+            const left = createElement('div', null);
+            left.style.display = 'flex';
+            left.style.alignItems = 'center';
+
+            const badge = createElement('div', `rank-badge rank-${i + 1}`, r.level);
+            // Fallback for > 3
+            if (i > 2) {
+                badge.className = 'rank-badge';
+                badge.style.background = '#EEE';
+                badge.style.color = '#555';
+            }
+            left.appendChild(badge);
+
+            const name = createElement('span', null, `${r.avatar} ${r.name}`);
+            name.style.fontWeight = 'bold';
+            left.appendChild(name);
+
+            row.appendChild(left);
+
+            const right = createElement('div');
+            right.style.textAlign = 'right';
+            right.appendChild(createElement('div', null, `${r.xp} XP`));
+            right.appendChild(createElement('div', 'subject-count', `${r.score} pts`));
+
+            row.appendChild(right);
+
+            lbPanel.appendChild(row);
+        });
+    }
+    el.main.appendChild(lbPanel);
+
+    // 3. Back Button
+    const backBtn = createElement('button', 'btn btn-primary', 'Back Home');
+    backBtn.addEventListener('click', () => navigate('home'));
+    el.main.appendChild(backBtn);
+}
+
+// Override
+renderStats = renderStatsNew;
