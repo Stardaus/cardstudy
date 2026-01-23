@@ -1,0 +1,16 @@
+{
+  "name": "flashcard-fun",
+  "version": "1.0.0",
+  "description": "A PWA for studying flashcards",
+  "scripts": {
+    "start": "npx http-server . -p 8080 -c-1 --cors",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [
+    "flashcard",
+    "pwa",
+    "study"
+  ],
+  "author": "",
+  "license": "ISC"
+}
