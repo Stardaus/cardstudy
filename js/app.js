@@ -1,6 +1,7 @@
 ﻿// Modules
 // PapaParse is loaded via script tag in index.html as a global: window.Papa
 import { openDB } from './vendor/idb.js';
+import { sounds } from './sound.js';
 
 // --- CONFIG ---
 const DB_NAME = 'flashcard_fun_v2';
@@ -31,6 +32,7 @@ const validate = {
         return {
             id: String(c.id).substring(0, 100),
             subject: String(c.subject || 'Uncategorized').substring(0, 50).trim(),
+            topic: String(c.topic || 'General').substring(0, 50).trim(),
             question: String(c.question).substring(0, 2000),
             answer: String(c.answer).substring(0, 2000),
             notes: String(c.notes || '').substring(0, 5000)
@@ -45,6 +47,7 @@ const state = {
     queue: [],
     currentCardIndex: 0,
     currentSubject: null, // null = All
+    currentTopic: null,   // null = All in Subject
     currentUser: null,    // null = Guest
     // Game State
     gameQueue: [],
@@ -120,8 +123,8 @@ async function init() {
     // 1.2 Load Config
     await loadConfig();
 
-    // 1.5 Load User (or Guest)
-    await loadUser();
+    // 1.5 Load User (Skip for "Who are you?" start)
+    // await loadUser(); 
 
     // 2. Bind Nav
     el.navBtns.forEach(btn => {
@@ -171,8 +174,43 @@ async function init() {
         });
     }
 
-    // 4. Load Home
-    navigate('home');
+    // 4. Load User Select (Startup)
+    navigate('user-select');
+
+    // 5. Init Audio (First Interaction)
+    document.addEventListener('click', () => sounds.init(), { once: true });
+
+    // 6. Init Visuals (Ripple)
+    initRipple();
+}
+
+function initRipple() {
+    document.addEventListener('click', function (e) {
+        // Find closest button-like element
+        const target = e.target.closest('.btn, .subject-card, .nav-btn');
+        if (!target) return;
+
+        // Create ripple
+        const ripple = document.createElement('span');
+        ripple.className = 'ripple';
+        
+        // Position
+        const rect = target.getBoundingClientRect();
+        const size = Math.max(rect.width, rect.height);
+        
+        // Center on click coordinates relative to button
+        const x = e.clientX - rect.left - size / 2;
+        const y = e.clientY - rect.top - size / 2;
+        
+        ripple.style.width = ripple.style.height = `${size}px`;
+        ripple.style.left = `${x}px`;
+        ripple.style.top = `${y}px`;
+
+        target.appendChild(ripple);
+
+        // Remove after anim
+        setTimeout(() => ripple.remove(), 600);
+    });
 }
 
 // --- ROUTER ---
@@ -183,6 +221,16 @@ function navigate(viewName) {
     el.navBtns.forEach(btn => {
         btn.classList.toggle('active', btn.dataset.target === viewName);
     });
+
+    // Hide Nav on User Select screens for clean look
+    const navBar = document.querySelector('.bottom-nav');
+    if (navBar) {
+        if (viewName === 'user-select' || viewName === 'user-create') {
+            navBar.style.display = 'none';
+        } else {
+            navBar.style.display = 'flex';
+        }
+    }
 
     // Render View
     render(viewName);
@@ -196,6 +244,10 @@ async function render(view) {
 
     if (view === 'home') {
         renderHome();
+    } else if (view === 'topic-select') {
+        await renderTopicSelect();
+    } else if (view === 'hub') {
+        renderHub();
     } else if (view === 'study') {
         await renderStudy();
     } else if (view === 'settings') {
@@ -219,6 +271,21 @@ function updateAvatarUI() {
     if (avatarBtn) {
         avatarBtn.textContent = state.currentUser ? state.currentUser.avatar : '👤';
     }
+}
+
+// --- HELPER: RESET SESSION ---
+function resetSessionState() {
+    state.queue = [];
+    state.gameQueue = [];
+    state.gameIndex = 0;
+    state.currentCardIndex = 0;
+    state.sessionScore = 0;
+    state.sessionStreak = 0;
+    state.studyStreak = 0;
+    state.studySessionScore = 0;
+    state.currentSubject = null;
+    state.currentTopic = null;
+    // We don't reset DB or config
 }
 
 // --- DOM HELPERS ---
@@ -249,6 +316,109 @@ function renderSafeHtml(container, content) {
 }
 
 // --- VIEWS ---
+
+async function renderTopicSelect() {
+    // Header
+    const title = createElement('h1', null, state.currentSubject);
+    el.main.appendChild(title);
+
+    const subTitle = createElement('p', null, 'Choose a Topic');
+    subTitle.style.textAlign = 'center';
+    subTitle.style.color = '#888';
+    el.main.appendChild(subTitle);
+
+    // Get Topics
+    const rawCards = await state.db.getAll(STORE_CARDS);
+    const allCards = rawCards.map(validate.card).filter(Boolean);
+    const subjCards = allCards.filter(c => c.subject === state.currentSubject);
+
+    const topicMap = new Map();
+    subjCards.forEach(c => {
+        const t = c.topic || 'General';
+        topicMap.set(t, (topicMap.get(t) || 0) + 1);
+    });
+
+    const grid = createElement('div', 'subject-grid');
+
+    // "All" Option
+    const allBtn = createElement('button', 'subject-card');
+    allBtn.style.borderBottom = '4px solid var(--primary)';
+    allBtn.appendChild(createElement('div', 'subject-icon', '📚'));
+    allBtn.appendChild(createElement('div', 'subject-name', 'Mix All'));
+    allBtn.appendChild(createElement('div', 'subject-count', `${subjCards.length} cards`));
+    allBtn.addEventListener('click', () => {
+        state.currentTopic = null; // All
+        navigate('hub');
+    });
+    grid.appendChild(allBtn);
+
+    // Topics
+    topicMap.forEach((count, topic) => {
+        const btn = createElement('button', 'subject-card');
+        // Random color logic could go here
+        btn.appendChild(createElement('div', 'subject-icon', '📑'));
+        btn.appendChild(createElement('div', 'subject-name', topic));
+        btn.appendChild(createElement('div', 'subject-count', `${count} cards`));
+        btn.addEventListener('click', () => {
+            state.currentTopic = topic;
+            navigate('hub');
+        });
+        grid.appendChild(btn);
+    });
+
+    el.main.appendChild(grid);
+
+    // Back
+    const backBtn = createElement('button', 'btn', '← Back to Subjects');
+    backBtn.style.marginTop = '30px';
+    backBtn.style.background = 'transparent';
+    backBtn.style.color = '#888';
+    backBtn.addEventListener('click', () => navigate('home'));
+    el.main.appendChild(backBtn);
+}
+
+function renderHub() {
+    const contextName = state.currentTopic ? `${state.currentTopic}` : `${state.currentSubject}`;
+    
+    // Header
+    const title = createElement('h1', null, contextName);
+    el.main.appendChild(title);
+
+    const sub = createElement('p', null, state.currentTopic ? `Topic in ${state.currentSubject}` : 'All Topics');
+    sub.style.textAlign = 'center';
+    sub.style.color = '#888';
+    el.main.appendChild(sub);
+
+    // Action Grid
+    const grid = document.createElement('div');
+    grid.style.display = 'grid';
+    grid.style.gap = '20px';
+    grid.style.marginTop = '40px';
+
+    // Study Button
+    const studyBtn = createElement('button', 'btn btn-primary', '📚  Study Cards');
+    studyBtn.style.height = '80px';
+    studyBtn.style.fontSize = '1.2rem';
+    studyBtn.addEventListener('click', () => navigate('study'));
+    grid.appendChild(studyBtn);
+
+    // Quiz Button
+    const quizBtn = createElement('button', 'btn btn-success', '🎮  Play Quiz');
+    quizBtn.style.height = '80px';
+    quizBtn.style.fontSize = '1.2rem';
+    quizBtn.addEventListener('click', () => navigate('game'));
+    grid.appendChild(quizBtn);
+
+    el.main.appendChild(grid);
+
+    // Back
+    const backBtn = createElement('button', 'btn', '← Back');
+    backBtn.style.marginTop = '30px';
+    backBtn.style.background = 'transparent';
+    backBtn.style.color = '#888';
+    backBtn.addEventListener('click', () => navigate('topic-select'));
+    el.main.appendChild(backBtn);
+}
 
 async function renderHome() {
     const meta = await state.db.get(STORE_META, 'sync_info');
@@ -298,21 +468,6 @@ async function renderHome() {
     avatar.setAttribute('aria-label', 'Select User Profile');
     avatar.addEventListener('click', () => navigate('user-select'));
     container.appendChild(avatar);
-
-    // Stats Button (Top Left)
-    const statsBtn = createElement('button', 'avatar-btn', '📊');
-    statsBtn.style.position = 'absolute';
-    statsBtn.style.top = '20px';
-    statsBtn.style.left = '20px';
-    statsBtn.style.fontSize = '1.5rem';
-    statsBtn.style.cursor = 'pointer';
-    statsBtn.style.background = '#FFF';
-    statsBtn.style.padding = '8px';
-    statsBtn.style.borderRadius = '50%';
-    statsBtn.style.boxShadow = '0 2px 5px rgba(0,0,0,0.1)';
-    statsBtn.setAttribute('aria-label', 'View Statistics');
-    statsBtn.addEventListener('click', () => navigate('stats'));
-    container.appendChild(statsBtn);
 
     // Title
     container.appendChild(createElement('h1', null, 'Pick a Topic!'));
@@ -367,7 +522,8 @@ async function renderHome() {
 
     allBtn.addEventListener('click', () => {
         state.currentSubject = null;
-        navigate('study');
+        state.currentTopic = null;
+        navigate('hub');
     });
     container.appendChild(allBtn);
 
@@ -389,7 +545,7 @@ async function renderHome() {
 
         subCard.addEventListener('click', () => {
             state.currentSubject = subj;
-            navigate('study');
+            navigate('topic-select');
         });
 
         grid.appendChild(subCard);
@@ -547,6 +703,18 @@ function renderSettings() {
     el.main.appendChild(userPanel);
 
     // 3. Data Zone
+    const soundPanel = createElement('div', 'card-panel');
+    soundPanel.appendChild(createElement('h2', null, 'Sound'));
+    
+    const soundBtn = createElement('button', 'btn btn-secondary', sounds.muted ? 'Unmute Sounds 🔊' : 'Mute Sounds 🔇');
+    soundBtn.addEventListener('click', () => {
+        sounds.setMuted(!sounds.muted);
+        soundBtn.textContent = sounds.muted ? 'Unmute Sounds 🔊' : 'Mute Sounds 🔇';
+        if (!sounds.muted) sounds.play('success'); // Test sound
+    });
+    soundPanel.appendChild(soundBtn);
+    el.main.appendChild(soundPanel);
+
     const resetPanel = createElement('div', 'card-panel');
     resetPanel.appendChild(createElement('h2', null, 'Data'));
     const resetBtn = createElement('button', 'btn', 'Reset App');
@@ -687,9 +855,13 @@ async function renderGame() {
     const allCards = rawCards.map(validate.card).filter(Boolean);
 
     // Filter
-    const filteredCards = state.currentSubject
-        ? allCards.filter(c => c.subject === state.currentSubject)
-        : allCards;
+    let filteredCards = allCards;
+    if (state.currentSubject) {
+        filteredCards = filteredCards.filter(c => c.subject === state.currentSubject);
+    }
+    if (state.currentTopic) {
+        filteredCards = filteredCards.filter(c => c.topic === state.currentTopic);
+    }
 
     state.gameQueue = [];
 
@@ -782,8 +954,8 @@ function renderGameEmpty() {
     center.appendChild(createElement('p', null, 'You crushed the quiz.'));
 
     // Maybe offer to review anyway?
-    const btn = createElement('button', 'btn btn-secondary', 'Review Flashcards');
-    btn.addEventListener('click', () => navigate('study'));
+    const btn = createElement('button', 'btn btn-secondary', 'Back to Hub');
+    btn.addEventListener('click', () => navigate('hub'));
     center.appendChild(btn);
 
     const backBtn = createElement('button', 'btn btn-primary', 'Home');
@@ -901,10 +1073,16 @@ async function handleAnswer(btnElement, selectedText, item) {
         btnElement.style.backgroundColor = 'var(--success)';
         state.sessionScore += 10 + state.sessionStreak; // Bonus
         state.sessionStreak++;
+        sounds.play('success');
         showToast(`Correct! +${10 + state.sessionStreak - 1}`);
     } else {
-        btnElement.style.backgroundColor = 'var(--error)';
+        // Error Feedback
+        btnElement.classList.add('shake');
+        // Remove class after animation to allow re-shake if needed (though usually we move on)
+        setTimeout(() => btnElement.classList.remove('shake'), 500);
+
         state.sessionStreak = 0;
+        sounds.play('error');
         showToast('Oops! 😅');
         // Highlight correct one?
         // We can find the button with the correct text and paint green
@@ -966,9 +1144,13 @@ async function renderStudy() {
     const allCards = rawCards.map(validate.card).filter(Boolean);
 
     // Filter by Subject if selected
-    const filteredCards = state.currentSubject
-        ? allCards.filter(c => c.subject === state.currentSubject)
-        : allCards;
+    let filteredCards = allCards;
+    if (state.currentSubject) {
+        filteredCards = filteredCards.filter(c => c.subject === state.currentSubject);
+    }
+    if (state.currentTopic) {
+        filteredCards = filteredCards.filter(c => c.topic === state.currentTopic);
+    }
 
     state.queue = [];
 
@@ -1278,6 +1460,7 @@ async function grade(known) {
 
         // Trigger Reward
         triggerConfetti();
+        sounds.play('success');
 
         if (state.currentUser) {
             let stats = await state.db.get(STORE_STATS, state.currentUser.id);
@@ -1295,6 +1478,7 @@ async function grade(known) {
             if (newLvl > oldLvl) {
                 showToast(`LEVEL UP! 🌟 Lvl ${newLvl}`, 4000);
                 triggerConfetti();
+                sounds.play('levelup');
                 setTimeout(triggerConfetti, 500);
             } else {
                 showToast(`Check! +${xp} XP 🔥 ${state.studyStreak}`);
@@ -1304,6 +1488,7 @@ async function grade(known) {
         }
     } else {
         state.studyStreak = 0;
+        sounds.play('hint');
         showToast('Keep Trying! 💪');
     }
 
@@ -1311,7 +1496,7 @@ async function grade(known) {
     state.currentCardIndex++;
     if (state.currentCardIndex >= state.queue.length) {
         // Done
-        navigate('study'); // Will trigger "All caught up"
+        navigate('hub'); // Will trigger "All caught up" check if we wanted, but hub is better landing
     } else {
         renderCardStage();
     }
@@ -1462,7 +1647,7 @@ async function deleteUser(userId) {
     showToast(`${user.name} deleted`);
 
     // Refresh the user selection screen
-    renderUserSelect();
+    render('user-select');
 }
 
 async function resetAll() {
@@ -1474,8 +1659,9 @@ async function resetAll() {
     await state.db.clear(STORE_STATS);
     state.currentUser = null;
     localStorage.removeItem('lastUserId');
+    resetSessionState();
     showToast('Reset Complete 🗑️');
-    navigate('home');
+    navigate('user-select');
 }
 
 function showToast(msg, duration = 2000, actionLabel = null, actionCb = null) {
@@ -1564,8 +1750,11 @@ async function switchUser(userId) {
             console.log('Switched to', user.name);
         }
     }
-    // Reload to refresh everything (simplest)
-    window.location.reload();
+    
+    // Smooth transition instead of reload
+    resetSessionState();
+    updateAvatarUI(); // Update header avatar immediately
+    navigate('home');
 }
 
 function triggerConfetti() {

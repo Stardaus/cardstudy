@@ -1,10 +1,11 @@
-const CACHE_NAME = 'flashcard-fun-v5'; // Bumped version
+const CACHE_NAME = 'flashcard-fun-v10'; // Bumped version
 const ASSETS = [
     './',
     './index.html',
     './config.json',
     './css/style.css',
     './js/app.js',
+    './js/sound.js',
     './js/vendor/papaparse.min.js',
     './js/vendor/idb.js',
     './js/vendor/wrap-idb-value.js', // Added missing dependency
