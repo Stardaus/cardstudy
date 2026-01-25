@@ -1,4 +1,4 @@
-const CACHE_NAME = 'flashcard-fun-v10'; // Bumped version
+const CACHE_NAME = 'flashcard-fun-v12'; // Bumped version
 const ASSETS = [
     './',
     './index.html',

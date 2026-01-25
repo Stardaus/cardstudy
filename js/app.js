@@ -2,6 +2,9 @@
 // PapaParse is loaded via script tag in index.html as a global: window.Papa
 import { openDB } from './vendor/idb.js';
 import { sounds } from './sound.js';
+import { startTour } from './tour.js';
+import { renderGuide } from './guide.js';
+import { runTourForView } from './tour_config.js';
 
 // --- CONFIG ---
 const DB_NAME = 'flashcard_fun_v2';
@@ -69,6 +72,11 @@ const el = {
     userAvatar: null
 };
 
+function setAppHeight() {
+    const height = window.visualViewport ? window.visualViewport.height : window.innerHeight;
+    document.documentElement.style.setProperty('--app-height', `${Math.round(height)}px`);
+}
+
 // --- XP LOGIC ---
 function getLevelInfo(xp) {
     if (!xp) xp = 0;
@@ -100,6 +108,13 @@ function getLevelInfo(xp) {
 // --- INITIALIZATION ---
 async function init() {
     console.log('âœ¨ Flashcard Fun Starting...');
+
+    // Keep layout synced with the visible viewport (mobile URL bar).
+    setAppHeight();
+    window.addEventListener('resize', setAppHeight);
+    if (window.visualViewport) {
+        window.visualViewport.addEventListener('resize', setAppHeight);
+    }
 
     // 1. Setup DB
     state.db = await openDB(DB_NAME, 2, {
@@ -260,6 +275,8 @@ async function render(view) {
         await renderGame();
     } else if (view === 'stats') {
         await renderStats();
+    } else if (view === 'guide') {
+        renderGuide(el.main, navigate);
     }
 }
 
@@ -375,16 +392,28 @@ async function renderTopicSelect() {
     backBtn.style.color = '#888';
     backBtn.addEventListener('click', () => navigate('home'));
     el.main.appendChild(backBtn);
+
+    // Bottom Spacer for Scroll
+    const spacer = createElement('div');
+    spacer.style.height = '120px';
+    el.main.appendChild(spacer);
+
+    checkAndRunTour('topic-select');
 }
 
 function renderHub() {
-    const contextName = state.currentTopic ? `${state.currentTopic}` : `${state.currentSubject}`;
+    let contextName = 'Everything';
+    if (state.currentTopic) {
+        contextName = state.currentTopic;
+    } else if (state.currentSubject) {
+        contextName = state.currentSubject;
+    }
     
     // Header
     const title = createElement('h1', null, contextName);
     el.main.appendChild(title);
 
-    const sub = createElement('p', null, state.currentTopic ? `Topic in ${state.currentSubject}` : 'All Topics');
+    const sub = createElement('p', null, state.currentTopic ? `Topic in ${state.currentSubject}` : (state.currentSubject ? 'All Topics' : 'All Subjects'));
     sub.style.textAlign = 'center';
     sub.style.color = '#888';
     el.main.appendChild(sub);
@@ -416,8 +445,21 @@ function renderHub() {
     backBtn.style.marginTop = '30px';
     backBtn.style.background = 'transparent';
     backBtn.style.color = '#888';
-    backBtn.addEventListener('click', () => navigate('topic-select'));
+    
+    if (state.currentSubject) {
+        backBtn.addEventListener('click', () => navigate('topic-select'));
+    } else {
+        backBtn.addEventListener('click', () => navigate('home'));
+    }
+    
     el.main.appendChild(backBtn);
+
+    // Bottom Spacer for Scroll
+    const spacer = createElement('div');
+    spacer.style.height = '120px';
+    el.main.appendChild(spacer);
+
+    checkAndRunTour('hub');
 }
 
 async function renderHome() {
@@ -452,6 +494,20 @@ async function renderHome() {
     icon.style.marginBottom = '10px';
     icon.textContent = '🧠';
     container.appendChild(icon);
+
+    // Help/Tour Button (Top Left)
+    const tourBtn = createElement('button', 'avatar-btn', '❓');
+    tourBtn.style.position = 'absolute';
+    tourBtn.style.top = '20px';
+    tourBtn.style.left = '20px';
+    tourBtn.style.fontSize = '1.2rem';
+    tourBtn.style.background = '#FFF';
+    tourBtn.style.padding = '8px 12px';
+    tourBtn.style.borderRadius = '20px';
+    tourBtn.style.boxShadow = '0 2px 5px rgba(0,0,0,0.1)';
+    tourBtn.setAttribute('aria-label', 'Start Tour');
+    tourBtn.addEventListener('click', () => runTourForView('home'));
+    container.appendChild(tourBtn);
 
     // User Avatar (Top Right)
     const avatar = createElement('button', 'avatar-btn', state.currentUser ? state.currentUser.avatar : '👤');
@@ -562,6 +618,13 @@ async function renderHome() {
     }
 
     el.main.appendChild(container);
+
+    // Bottom Spacer
+    const spacer = createElement('div');
+    spacer.style.height = '120px';
+    el.main.appendChild(spacer);
+
+    checkAndRunTour('home');
 }
 
 function getSubjectIcon(subject) {
@@ -653,6 +716,8 @@ async function renderStats() {
     const backBtn = createElement('button', 'btn btn-primary', 'Back Home');
     backBtn.addEventListener('click', () => navigate('home'));
     el.main.appendChild(backBtn);
+
+    checkAndRunTour('stats');
 }
 
 function renderSettings() {
@@ -697,6 +762,16 @@ function renderSettings() {
     // 2. Profile
     const userPanel = createElement('div', 'card-panel');
     userPanel.appendChild(createElement('h2', null, 'Profile'));
+    
+    // Help Button
+    const guideBtn = createElement('button', 'btn', '📖 User Guide');
+    guideBtn.style.marginBottom = '10px';
+    guideBtn.style.border = '2px solid var(--primary)';
+    guideBtn.style.background = 'transparent';
+    guideBtn.style.color = 'var(--primary)';
+    guideBtn.addEventListener('click', () => navigate('guide'));
+    userPanel.appendChild(guideBtn);
+
     const switchBtn = createElement('button', 'btn btn-primary', 'Switch User');
     switchBtn.addEventListener('click', () => navigate('user-select'));
     userPanel.appendChild(switchBtn);
@@ -724,6 +799,13 @@ function renderSettings() {
     resetBtn.addEventListener('click', resetAll);
     resetPanel.appendChild(resetBtn);
     el.main.appendChild(resetPanel);
+
+    // Bottom Spacer
+    const spacer = createElement('div');
+    spacer.style.height = '120px';
+    el.main.appendChild(spacer);
+
+    checkAndRunTour('settings');
 }
 
 // --- USER VIEWS ---
@@ -790,6 +872,11 @@ async function renderUserSelect() {
     grid.appendChild(newCard);
 
     el.main.appendChild(grid);
+
+    // Bottom Spacer
+    const spacer = createElement('div');
+    spacer.style.height = '120px';
+    el.main.appendChild(spacer);
 }
 
 function renderCreateUser() {
@@ -843,6 +930,11 @@ function renderCreateUser() {
     form.appendChild(saveBtn);
 
     el.main.appendChild(form);
+
+    // Bottom Spacer
+    const spacer = createElement('div');
+    spacer.style.height = '120px';
+    el.main.appendChild(spacer);
 }
 
 // --- GAME / QUIZ VIEWS ---
@@ -942,6 +1034,8 @@ async function renderGame() {
     }
 
     renderQuizStage();
+    
+    checkAndRunTour('game');
 }
 
 function renderGameEmpty() {
@@ -1020,6 +1114,11 @@ async function renderQuizStage() {
     });
 
     el.main.appendChild(optionsGrid);
+
+    // Bottom Spacer
+    const spacer = createElement('div');
+    spacer.style.height = '120px';
+    el.main.appendChild(spacer);
 }
 
 async function generateOptions(currentItem) {
@@ -1347,6 +1446,7 @@ function renderCardStage() {
     // Stage
     const stage = createElement('div', 'flashcard-stage');
     const flashcard = createElement('div', 'flashcard'); // Revert to div for layout safety
+    flashcard.id = 'study-flashcard';
     flashcard.setAttribute('role', 'button');
     flashcard.setAttribute('tabindex', '0');
     flashcard.setAttribute('aria-label', 'Flashcard, tap to flip');
@@ -1419,15 +1519,22 @@ function renderCardStage() {
     btnGrid.style.zIndex = '10'; /* Sit above flashcard 3D space */
 
     const helpBtn = createElement('button', 'btn btn-primary', 'Help!');
+    helpBtn.id = 'study-help-btn';
     helpBtn.style.backgroundColor = 'var(--error)';
     helpBtn.addEventListener('click', () => grade(false));
     btnGrid.appendChild(helpBtn);
 
     const gotItBtn = createElement('button', 'btn btn-success', 'Got It!');
+    gotItBtn.id = 'study-gotit-btn';
     gotItBtn.addEventListener('click', () => grade(true));
     btnGrid.appendChild(gotItBtn);
 
     el.main.appendChild(btnGrid);
+
+    // Bottom Spacer
+    const spacer = createElement('div');
+    spacer.style.height = '120px';
+    el.main.appendChild(spacer);
 }
 
 // --- LOGIC ---
@@ -1821,6 +1928,19 @@ async function createUser(name, avatar) {
     await switchUser(id);
 }
 
+function checkAndRunTour(viewName) {
+    const key = `hasSeenTour_${viewName}`;
+    const hasSeen = localStorage.getItem(key);
+    if (!hasSeen) {
+        setTimeout(() => {
+            if (state.view === viewName) {
+                runTourForView(viewName);
+                localStorage.setItem(key, 'true');
+            }
+        }, 1000);
+    }
+}
+
 // Start
 function updateOnlineStatus() {
     const indicator = document.getElementById('offline-indicator');
@@ -1976,6 +2096,13 @@ async function renderStatsNew() {
     const backBtn = createElement('button', 'btn btn-primary', 'Back Home');
     backBtn.addEventListener('click', () => navigate('home'));
     el.main.appendChild(backBtn);
+
+    // Bottom Spacer for Scroll
+    const spacer = createElement('div');
+    spacer.style.height = '120px';
+    el.main.appendChild(spacer);
+
+    checkAndRunTour('stats');
 }
 
 // Override
